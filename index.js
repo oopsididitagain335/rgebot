@@ -8,6 +8,7 @@ const {
   EmbedBuilder,
   ChannelType,
   PermissionsBitField,
+  StringSelectMenuBuilder,
 } = require('discord.js');
 const express = require('express');
 
@@ -35,15 +36,17 @@ const client = new Client({
 // 🔧 Hardcoded IDs
 const TICKET_CATEGORY_ID = '1408931971811512420'; // Ticket category
 const SUPPORT_ROLE_ID = '1409167134831022242'; // Support role
-const STAFF_ROLE_ID = '1409167134831022242'; // Role for staff (adjust if different)
+const REVIEWER_ROLE_ID = '1408876237266620508'; // Role that can accept/deny staff apps
+const STAFF_APPLICATION_CHANNEL_ID = '1408876437976514633'; // Staff app review channel
 const TICKET_OPEN_LOG_ID = '1408876441164054608'; // Open log
 const TICKET_CLOSE_LOG_ID = '1408876442321686548'; // Close log
 const BANNER_URL = 'https://www.stealthunitgg.xyz/money.png'; // Banner image
+const INVITE_LINK = 'https://discord.gg/Gm877dFGHq'; // Invite to send on accept
 
 // 🎟️ Ticket Types
 const TYPES = {
   APPLY_TEAM: 'apply_team',
-  APPLY_STAFF: 'apply_staff', // Now opens a ticket
+  APPLY_STAFF: 'apply_staff',
   SUPPORT: 'support',
   CONTACT_OWNER: 'contact_owner',
 };
@@ -65,6 +68,33 @@ const TICKET_TYPE_NAMES = {
   [TYPES.SUPPORT]: 'Support',
   [TYPES.CONTACT_OWNER]: 'Contact Owner',
 };
+
+// 📝 Staff Application Questions
+const STAFF_QUESTIONS = [
+  'Why do you want to join the staff?',
+  'How much time can you dedicate weekly?',
+  'Previous moderation experience?',
+  'How old are you?',
+  'Timezone?',
+  'What sets you apart from others?',
+  'Describe your leadership style.',
+  'How do you handle conflict?',
+  'What is your biggest strength?',
+  'Biggest weakness?',
+  'How do you define teamwork?',
+  'Describe a time you resolved an issue.',
+  'What would you improve in this server?',
+  'How do you handle stress?',
+  'Preferred communication method?',
+  'Are you active on Discord daily?',
+  'What motivates you?',
+  'Any suggestions for the server?',
+  'Additional info?',
+  'Resume / Portfolio (link)',
+];
+
+// 🗂️ Track active applications: channelId → { userId, answers: [] }
+const activeApplications = new Map();
 
 client.once('ready', () => {
   console.log(`✅ ${client.user.tag} is online and ready!`);
@@ -95,13 +125,12 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// 🎟️ Handle Button Interactions (All Tickets)
+// 🎟️ Handle Button Interactions (Create Tickets)
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
 
   const { customId, user, guild, member } = interaction;
 
-  // Only handle valid ticket types
   if (!Object.values(TYPES).includes(customId)) return;
 
   await interaction.deferReply({ ephemeral: true });
@@ -112,31 +141,29 @@ client.on('interactionCreate', async (interaction) => {
       return await interaction.editReply({ content: '❌ Ticket category not found.' });
     }
 
-    // Base permissions: user can view, @everyone denied
     let permissionOverwrites = [
       { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
       { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
     ];
 
-    // Define access based on ticket type
     if (customId === TYPES.APPLY_STAFF) {
-      // Only Staff and Admins can see Apply Staff tickets
+      // Only REVIEWER_ROLE can see staff apps
       permissionOverwrites.push({
-        id: STAFF_ROLE_ID,
+        id: REVIEWER_ROLE_ID,
         allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages],
       });
     } else if (customId === TYPES.SUPPORT || customId === TYPES.APPLY_TEAM) {
-      // Support team can help
       permissionOverwrites.push({
         id: SUPPORT_ROLE_ID,
         allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages],
       });
     } else if (customId === TYPES.CONTACT_OWNER) {
-      // Contact Owner: hide from support, show only to admins
-      // (Support denied above; admin will be added below)
+      permissionOverwrites.push({
+        id: SUPPORT_ROLE_ID,
+        deny: [PermissionsBitField.Flags.ViewChannel],
+      });
     }
 
-    // Always allow Admins full access
     const adminRole = guild.roles.cache.find(r => r.permissions.has(PermissionsBitField.Flags.Administrator));
     if (adminRole) {
       permissionOverwrites.push({
@@ -145,7 +172,6 @@ client.on('interactionCreate', async (interaction) => {
       });
     }
 
-    // Create channel
     const channelName = `ticket-${user.username.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`;
     const ticketChannel = await guild.channels.create({
       name: channelName,
@@ -155,7 +181,6 @@ client.on('interactionCreate', async (interaction) => {
       permissionOverwrites,
     });
 
-    // Ticket Embed
     const ticketEmbed = new EmbedBuilder()
       .setTitle(`${BRAND_EMOJIS[customId]} ${TICKET_TYPE_NAMES[customId]} Opened`)
       .addFields(
@@ -166,7 +191,6 @@ client.on('interactionCreate', async (interaction) => {
       .setFooter({ text: 'Regime Unit', iconURL: client.user.displayAvatarURL() })
       .setTimestamp();
 
-    // Buttons
     const closeBtn = new ButtonBuilder()
       .setCustomId('close_ticket')
       .setLabel('Close Ticket')
@@ -181,47 +205,13 @@ client.on('interactionCreate', async (interaction) => {
 
     const row = new ActionRowBuilder().addComponents(closeBtn, claimBtn);
 
-    // Send initial message
     await ticketChannel.send({
       content: `<@${user.id}>`,
       embeds: [ticketEmbed],
       components: [row],
     });
 
-    // Special instructions for Apply Staff
-    if (customId === TYPES.APPLY_STAFF) {
-      const staffAppEmbed = new EmbedBuilder()
-        .setTitle('💼 Staff Application')
-        .setDescription('Please answer the following questions in this channel:')
-        .addFields(
-          { name: '1. Why do you want to join the staff?', value: 'Write your answer...' },
-          { name: '2. How much time can you dedicate weekly?', value: 'Write your answer...' },
-          { name: '3. Previous moderation experience?', value: 'Write your answer...' },
-          { name: '4. How old are you?', value: 'Write your answer...' },
-          { name: '5. Timezone?', value: 'Write your answer...' },
-          { name: '6. What sets you apart from others?', value: 'Write your answer...' },
-          { name: '7. Describe your leadership style.', value: 'Write your answer...' },
-          { name: '8. How do you handle conflict?', value: 'Write your answer...' },
-          { name: '9. What is your biggest strength?', value: 'Write your answer...' },
-          { name: '10. Biggest weakness?', value: 'Write your answer...' },
-          { name: '11. How do you define teamwork?', value: 'Write your answer...' },
-          { name: '12. Describe a time you resolved an issue.', value: 'Write your answer...' },
-          { name: '13. What would you improve in this server?', value: 'Write your answer...' },
-          { name: '14. How do you handle stress?', value: 'Write your answer...' },
-          { name: '15. Preferred communication method?', value: 'Write your answer...' },
-          { name: '16. Are you active on Discord daily?', value: 'Write your answer...' },
-          { name: '17. What motivates you?', value: 'Write your answer...' },
-          { name: '18. Any suggestions for the server?', value: 'Write your answer...' },
-          { name: '19. Additional info?', value: 'Write your answer...' },
-          { name: '20. Resume / Portfolio (link)', value: 'Paste a link or write "N/A"' }
-        )
-        .setColor('#FFD700')
-        .setFooter({ text: 'Answer each question clearly. Staff will review shortly.' });
-
-      await ticketChannel.send({ embeds: [staffAppEmbed] });
-    }
-
-    // 📜 Log ticket open
+    // 📜 Log open
     const openLog = guild.channels.cache.get(TICKET_OPEN_LOG_ID);
     if (openLog) {
       const logEmbed = new EmbedBuilder()
@@ -240,9 +230,190 @@ client.on('interactionCreate', async (interaction) => {
       content: `✅ Ticket created: ${ticketChannel}`,
       ephemeral: true,
     });
+
+    // 🔹 Start staff Q&A if needed
+    if (customId === TYPES.APPLY_STAFF) {
+      activeApplications.set(ticketChannel.id, {
+        userId: user.id,
+        answers: [],
+        currentQuestionIndex: 0,
+      });
+
+      await askNextQuestion(ticketChannel);
+    }
   } catch (err) {
     console.error(err);
     await interaction.editReply({ content: '❌ Failed to create ticket.' });
+  }
+});
+
+// 🔹 Ask next question
+async function askNextQuestion(channel) {
+  const app = activeApplications.get(channel.id);
+  if (!app || app.currentQuestionIndex >= STAFF_QUESTIONS.length) return;
+
+  const question = STAFF_QUESTIONS[app.currentQuestionIndex];
+  const qNum = app.currentQuestionIndex + 1;
+
+  const embed = new EmbedBuilder()
+    .setTitle(`💼 Staff Application • Question ${qNum}/20`)
+    .setDescription(question)
+    .setColor('#FFD700')
+    .setFooter({ text: 'Please reply with your answer.' });
+
+  await channel.send({ embeds: [embed] });
+}
+
+// 📥 Collect answers
+client.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
+  if (!message.guild) return;
+
+  const app = activeApplications.get(message.channel.id);
+  if (!app) return;
+
+  const qIndex = app.currentQuestionIndex;
+  app.answers[qIndex] = message.content.trim() || '(No answer provided)';
+
+  app.currentQuestionIndex++;
+
+  if (app.currentQuestionIndex < STAFF_QUESTIONS.length) {
+    setTimeout(() => askNextQuestion(message.channel), 1200);
+  } else {
+    await finalizeStaffApplication(message.channel, app.userId, app.answers);
+    activeApplications.delete(message.channel.id);
+
+    await message.channel.send({
+      content: '✅ Thank you! Your application has been submitted for review.',
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('✅ Application Submitted')
+          .setDescription('Staff will review your answers shortly.')
+          .setColor('#00FF00'),
+      ],
+    });
+
+    // Auto-close after 5 seconds
+    setTimeout(() => message.channel.delete().catch(console.error), 5000);
+  }
+});
+
+// 📤 Send to staff review channel
+async function finalizeStaffApplication(channel, userId, answers) {
+  const user = await client.users.fetch(userId).catch(() => null);
+  const guild = channel.guild;
+
+  const appEmbed = new EmbedBuilder()
+    .setTitle('💼 New Staff Application')
+    .setDescription('A new staff application has been submitted. Please review and accept or deny.')
+    .addFields(
+      { name: '👤 Applicant', value: user ? `<@${userId}>` : `\`${userId}\``, inline: true },
+      { name: '🆔 User ID', value: `\`${userId}\``, inline: true }
+    )
+    .setColor('#FF0000')
+    .setTimestamp();
+
+  // Add answers
+  answers.forEach((ans, i) => {
+    const q = STAFF_QUESTIONS[i];
+    appEmbed.addFields({
+      name: `Q${i + 1}: ${q.length > 40 ? q.slice(0, 40) + '...' : q}`,
+      value: ans,
+    });
+  });
+
+  const denyBtn = new ButtonBuilder()
+    .setCustomId(`deny_staff_${userId}`)
+    .setLabel('❌ Deny')
+    .setStyle(ButtonStyle.Danger);
+
+  // Role selector
+  const roles = guild.roles.cache
+    .filter(r =>
+      r.id !== guild.id &&
+      !r.managed &&
+      r.editable &&
+      r.name.toLowerCase() !== 'bot'
+    )
+    .sort((a, b) => b.position - a.position)
+    .first(25);
+
+  if (roles.size === 0) {
+    console.error('No roles available for assignment');
+    return;
+  }
+
+  const roleOptions = roles.map(r => ({
+    label: r.name.substring(0, 80),
+    description: `Pos: ${r.position}`,
+    value: r.id,
+  }));
+
+  const roleMenu = new StringSelectMenuBuilder()
+    .setCustomId(`accept_staff_${userId}`)
+    .setPlaceholder('✅ Accept & Assign Role')
+    .addOptions(roleOptions);
+
+  const actionRow1 = new ActionRowBuilder().addComponents(denyBtn);
+  const actionRow2 = new ActionRowBuilder().addComponents(roleMenu);
+
+  const staffChannel = client.channels.cache.get(STAFF_APPLICATION_CHANNEL_ID);
+  if (staffChannel) {
+    await staffChannel.send({
+      content: `<@&${REVIEWER_ROLE_ID}>`,
+      embeds: [appEmbed],
+      components: [actionRow1, actionRow2],
+    });
+  } else {
+    console.error('Staff application channel not found.');
+  }
+}
+
+// ✅ Handle Accept/Deny
+client.on('interactionCreate', async (interaction) => {
+  if (interaction.isButton()) {
+    if (interaction.customId.startsWith('deny_staff_')) {
+      const userId = interaction.customId.split('_')[2];
+      const user = await client.users.fetch(userId).catch(() => null);
+
+      const embed = new EmbedBuilder()
+        .setTitle('❌ Application Denied')
+        .setDescription(user ? `Application from ${user} has been denied.` : 'Application denied.')
+        .setColor('#FF0000');
+
+      await interaction.update({ embeds: [embed], components: [] });
+
+      if (user) {
+        user.send('❌ Your staff application was denied.').catch(() => {});
+      }
+    }
+  }
+
+  if (interaction.isStringSelectMenu()) {
+    if (interaction.customId.startsWith('accept_staff_')) {
+      const userId = interaction.customId.split('_')[2];
+      const selectedRoleId = interaction.values[0];
+      const user = await client.users.fetch(userId).catch(() => null);
+      const member = await interaction.guild.members.fetch(userId).catch(() => null);
+      const role = await interaction.guild.roles.fetch(selectedRoleId);
+
+      const roleName = role ? role.name : 'Unknown Role';
+
+      const embed = new EmbedBuilder()
+        .setTitle('✅ Application Accepted')
+        .setDescription(`Accepted and assigned: **${roleName}**`)
+        .setColor('#00FF00');
+
+      await interaction.update({ embeds: [embed], components: [] });
+
+      if (member && role) {
+        await member.roles.add(role).catch(console.error);
+      }
+
+      if (user) {
+        user.send(`🎉 Congratulations! You've been accepted as staff.\n\n🔗 Join the team: ${INVITE_LINK}`).catch(() => {});
+      }
+    }
   }
 });
 
@@ -252,7 +423,6 @@ client.on('interactionCreate', async (interaction) => {
 
   const { customId, channel, member, guild } = interaction;
 
-  // 🔒 Close Ticket
   if (customId === 'close_ticket') {
     if (!channel.name.startsWith('ticket-')) {
       return await interaction.reply({ content: '❌ This is not a ticket channel.', ephemeral: true });
@@ -264,7 +434,6 @@ client.on('interactionCreate', async (interaction) => {
       .setColor('#FF0000');
     await interaction.reply({ embeds: [embed] });
 
-    // Log closure
     const logChannel = guild.channels.cache.get(TICKET_CLOSE_LOG_ID);
     if (logChannel) {
       const logEmbed = new EmbedBuilder()
@@ -279,7 +448,6 @@ client.on('interactionCreate', async (interaction) => {
     setTimeout(() => channel.delete().catch(console.error), 5000);
   }
 
-  // 🏷️ Claim Ticket
   if (customId === 'claim_ticket') {
     const hasSupport = member.roles.cache.has(SUPPORT_ROLE_ID);
     const isAdmin = member.permissions.has(PermissionsBitField.Flags.Administrator);
