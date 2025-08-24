@@ -13,8 +13,16 @@ const {
   PermissionsBitField,
   StringSelectMenuBuilder,
 } = require('discord.js');
+const express = require('express');
 
-const express = require('express'); // For port binding
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Start web server (for hosting platforms)
+app.get('/', (req, res) => {
+  res.send('<h1>Regime Unit Ticket Bot</h1><p>✅ Running and connected to Discord.</p>');
+});
+app.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
 
 const client = new Client({
   intents: [
@@ -25,27 +33,13 @@ const client = new Client({
   ],
 });
 
-// 🌐 Start Express App (for hosting platforms)
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.get('/', (req, res) => {
-  res.send(`
-    <h1>Regime Unit Ticket Bot</h1>
-    <p>✅ Bot is running and connected to Discord.</p>
-    <p><em>This service manages tickets and staff applications.</em></p>
-  `);
-});
-
-app.listen(PORT, () => {
-  console.log(`🌐 Web server is running on port ${PORT}`);
-});
-
 // 🔧 Hardcoded IDs
 const TICKET_CATEGORY_ID = '1408931971811512420'; // Ticket category
-const STAFF_APPLICATION_CHANNEL_ID = '1408876357529768130'; // Staff review channel
-const SUPPORT_ROLE_ID = '1409167134831022242'; // Support team role
-const BANNER_URL = 'https://www.stealthunitgg.xyz/money.png'; // Hosted banner (image only)
+const STAFF_APPLICATION_CHANNEL_ID = '1408876357529768130'; // Staff review
+const SUPPORT_ROLE_ID = '1409167134831022242'; // Support role
+const TICKET_OPEN_LOG_ID = '1408876441164054608'; // Open log
+const TICKET_CLOSE_LOG_ID = '1408876442321686548'; // Close log
+const BANNER_URL = 'https://www.stealthunitgg.xyz/money.png'; // Banner image only
 
 // 🎟️ Ticket Types
 const TYPES = {
@@ -55,8 +49,8 @@ const TYPES = {
   CONTACT_OWNER: 'contact_owner',
 };
 
-// 🎨 Branding & Emojis
-const BRAND_COLOR = '#000000'; // Sleek black theme
+// 🎨 Branding
+const BRAND_COLOR = '#000000';
 const BRAND_EMOJIS = {
   apply_team: '🎯',
   apply_staff: '💼',
@@ -66,25 +60,25 @@ const BRAND_EMOJIS = {
   claim: '🔖',
 };
 
+const TICKET_TYPE_NAMES = {
+  [TYPES.APPLY_TEAM]: 'Apply Team',
+  [TYPES.SUPPORT]: 'Support',
+  [TYPES.CONTACT_OWNER]: 'Contact Owner',
+};
+
 client.once('ready', () => {
-  console.log(`✅ ${client.user.tag} is online and ready!`);
+  console.log(`✅ ${client.user.tag} is online!`);
 });
 
-// 🛠️ Send ticket panel (Admins only)
+// 🛠️ Send ticket panel (Admin only)
 client.on('messageCreate', async (message) => {
   if (message.content === '!ticketpanel' && message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
     const embed = new EmbedBuilder()
-      .setTitle(`${BRAND_EMOJIS.contact_owner} Welcome to Regime Unit`)
-      .setDescription(
-        'Choose a ticket type below to get assistance.\n\n' +
-        `**${BRAND_EMOJIS.apply_team} Apply Team** — Join our team\n` +
-        `**${BRAND_EMOJIS.apply_staff} Apply Staff** — Become part of the staff (Admin Review)\n` +
-        `**${BRAND_EMOJIS.support} Support** — Need help with something?\n` +
-        `**${BRAND_EMOJIS.contact_owner} Contact Owner** — For private or urgent matters`
-      )
+      .setTitle(`${BRAND_EMOJIS.contact_owner} Open a Ticket`)
+      .setDescription('Choose a ticket type below to get assistance.')
       .setImage(BANNER_URL)
       .setColor(BRAND_COLOR)
-      .setFooter({ text: 'Regime Unit • Secure & Professional', iconURL: client.user.displayAvatarURL() })
+      .setFooter({ text: 'Regime Unit', iconURL: client.user.displayAvatarURL() })
       .setTimestamp();
 
     const row1 = new ActionRowBuilder().addComponents(
@@ -101,7 +95,7 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// 🎟️ Handle ticket button clicks
+// 🎟️ Handle Button Clicks
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
 
@@ -113,10 +107,10 @@ client.on('interactionCreate', async (interaction) => {
 
   try {
     if (customId === TYPES.APPLY_STAFF) {
-      // 💼 Apply Staff: DM 20 questions
+      // 💼 Apply Staff: Send 20 questions via DM
       const dmChannel = await user.createDM().catch(() => null);
       if (!dmChannel) {
-        return interaction.editReply({ content: '❌ I couldn’t send you a DM. Please enable DMs from server members.' });
+        return interaction.editReply({ content: '❌ I couldn’t DM you. Please enable DMs from server members.' });
       }
 
       const modal = new ModalBuilder()
@@ -133,7 +127,7 @@ client.on('interactionCreate', async (interaction) => {
 
       const resumeInput = new TextInputBuilder()
         .setCustomId('resume')
-        .setLabel('📄 Resume (PDF/Drive link)')
+        .setLabel('📄 Resume (PDF/Drive Link)')
         .setStyle(TextInputStyle.Short)
         .setPlaceholder('https://drive.example.com/resume')
         .setRequired(false);
@@ -147,7 +141,7 @@ client.on('interactionCreate', async (interaction) => {
       client.application.set('pendingStaffApp', user.id);
 
     } else {
-      // 🎫 Create ticket: Apply Team, Support, Contact Owner
+      // 🎫 Create Ticket Channel
       const category = guild.channels.cache.get(TICKET_CATEGORY_ID);
       if (!category) return interaction.editReply({ content: '❌ Ticket category not found.' });
 
@@ -185,23 +179,27 @@ client.on('interactionCreate', async (interaction) => {
         permissionOverwrites,
       });
 
+      // 📝 Ticket Embed
       const ticketEmbed = new EmbedBuilder()
-        .setTitle(`${BRAND_EMOJIS[customId]} Ticket Opened`)
-        .setDescription('A member of the team will assist you shortly. Please provide details about your request.')
-        .addFields({ name: '👤 User', value: `<@${user.id}>`, inline: true })
+        .setTitle(`${BRAND_EMOJIS[customId]} ${TICKET_TYPE_NAMES[customId] || 'Ticket'} Opened`)
+        .setDescription('Please describe your request in detail. A team member will assist you shortly.')
+        .addFields(
+          { name: '👤 User', value: `<@${user.id}>`, inline: true },
+          { name: '📁 Category', value: TICKET_TYPE_NAMES[customId], inline: true }
+        )
         .setColor(BRAND_COLOR)
         .setFooter({ text: 'Regime Unit', iconURL: client.user.displayAvatarURL() })
         .setTimestamp();
 
       const closeBtn = new ButtonBuilder()
         .setCustomId('close_ticket')
-        .setLabel('Close')
+        .setLabel('Close Ticket')
         .setStyle(ButtonStyle.Danger)
         .setEmoji(BRAND_EMOJIS.close);
 
       const claimBtn = new ButtonBuilder()
         .setCustomId('claim_ticket')
-        .setLabel('Claim')
+        .setLabel('Claim Ticket')
         .setStyle(ButtonStyle.Primary)
         .setEmoji(BRAND_EMOJIS.claim);
 
@@ -213,18 +211,33 @@ client.on('interactionCreate', async (interaction) => {
         components: [row],
       });
 
+      // 📜 Log ticket open
+      const logChannel = guild.channels.cache.get(TICKET_OPEN_LOG_ID);
+      if (logChannel) {
+        const logEmbed = new EmbedBuilder()
+          .setTitle('🎫 Ticket Opened')
+          .setDescription(`**Type:** ${TICKET_TYPE_NAMES[customId]}\n**Channel:** ${ticketChannel}`)
+          .addFields(
+            { name: '👤 User', value: `<@${user.id}>`, inline: true },
+            { name: '🆔 ID', value: `\`${user.id}\``, inline: true }
+          )
+          .setColor('#00FF00')
+          .setTimestamp();
+        await logChannel.send({ embeds: [logEmbed] });
+      }
+
       await interaction.editReply({
-        content: `✅ Ticket created: ${ticketChannel}`,
+        content: `✅ Your ticket has been created: ${ticketChannel}`,
         ephemeral: true,
       });
     }
   } catch (err) {
     console.error(err);
-    await interaction.editReply({ content: '❌ An error occurred while creating the ticket.' });
+    await interaction.editReply({ content: '❌ An error occurred.' });
   }
 });
 
-// 📝 Handle Apply Staff Modal Submission
+// 📝 Handle Apply Staff Modal
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isModalSubmit() || interaction.customId !== 'apply_staff_modal') return;
 
@@ -243,18 +256,28 @@ client.on('interactionCreate', async (interaction) => {
   const fullResponse = responses.join('\n');
 
   try {
+    // 📩 Send to DM first
+    const dm = await interaction.user.createDM();
+    const dmEmbed = new EmbedBuilder()
+      .setTitle('💼 Your Staff Application (Preview)')
+      .setDescription(fullResponse)
+      .setColor('#FFD700')
+      .setFooter({ text: 'Regime Unit • Application submitted' })
+      .setTimestamp();
+    await dm.send({ embeds: [dmEmbed] });
+
+    // 📥 Forward to staff channel
     const staffChannel = client.channels.cache.get(STAFF_APPLICATION_CHANNEL_ID);
     if (!staffChannel) {
-      await interaction.editReply({ content: '❌ Staff application channel not found.' });
-      return;
+      return interaction.editReply({ content: '❌ Staff channel not found.' });
     }
 
     const appEmbed = new EmbedBuilder()
       .setTitle('💼 New Staff Application')
       .setDescription(fullResponse)
       .addFields(
-        { name: 'Applicant', value: `<@${userId}>`, inline: true },
-        { name: 'User ID', value: `\`${userId}\``, inline: true }
+        { name: '👤 Applicant', value: `<@${userId}>`, inline: true },
+        { name: '🆔 User ID', value: `\`${userId}\``, inline: true }
       )
       .setColor('#FF0000')
       .setTimestamp();
@@ -264,7 +287,7 @@ client.on('interactionCreate', async (interaction) => {
       .setLabel('❌ Deny')
       .setStyle(ButtonStyle.Danger);
 
-    const roleMenu = new StringSelectMenuBuilder()
+    const acceptMenu = new StringSelectMenuBuilder()
       .setCustomId(`accept_staff_${userId}`)
       .setPlaceholder('✅ Accept & Assign Role')
       .addOptions([
@@ -275,10 +298,10 @@ client.on('interactionCreate', async (interaction) => {
       ]);
 
     const actionRow1 = new ActionRowBuilder().addComponents(denyBtn);
-    const actionRow2 = new ActionRowBuilder().addComponents(roleMenu);
+    const actionRow2 = new ActionRowBuilder().addComponents(acceptMenu);
 
     await staffChannel.send({
-      content: `<@&${SUPPORT_ROLE_ID}>`, // Ping support role
+      content: `<@&${SUPPORT_ROLE_ID}>`, // Ping staff
       embeds: [appEmbed],
       components: [actionRow1, actionRow2],
     });
@@ -290,7 +313,7 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// 🛠️ Handle Close & Claim Buttons
+// 🛠️ Handle Close & Claim
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
 
@@ -301,35 +324,48 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: '❌ This is not a ticket!', ephemeral: true });
     }
 
-    const embed = new EmbedBuilder()
-      .setTitle(`${BRAND_EMOJIS.close} Closing Ticket`)
+    const closerEmbed = new EmbedBuilder()
+      .setTitle(`${BRAND_EMOJIS.close} Ticket Closing`)
       .setDescription('This ticket will be deleted in 5 seconds.')
-      .setColor('#FF0000');
+      .setColor('#FF0000')
+      .setTimestamp();
 
-    await interaction.reply({ embeds: [embed] });
+    await interaction.reply({ embeds: [closerEmbed] });
+
+    // 📜 Log ticket close
+    const logChannel = guild.channels.cache.get(TICKET_CLOSE_LOG_ID);
+    if (logChannel) {
+      const logEmbed = new EmbedBuilder()
+        .setTitle('🗑️ Ticket Closed')
+        .setDescription(`**Channel:** ${channel.name}\n**Closed by:** ${member}`)
+        .addFields(
+          { name: '📁 Category', value: channel.parent ? channel.parent.name : 'No Category', inline: true }
+        )
+        .setColor('#FF4500')
+        .setTimestamp();
+      await logChannel.send({ embeds: [logEmbed] });
+    }
 
     setTimeout(() => channel.delete().catch(console.error), 5000);
   }
 
   if (customId === 'claim_ticket') {
-    const hasSupportRole = member.roles.cache.has(SUPPORT_ROLE_ID);
+    const hasSupport = member.roles.cache.has(SUPPORT_ROLE_ID);
     const isAdmin = member.permissions.has(PermissionsBitField.Flags.Administrator);
 
-    if (!hasSupportRole && !isAdmin) {
+    if (!hasSupport && !isAdmin) {
       return interaction.reply({ content: '❌ You do not have permission to claim this ticket.', ephemeral: true });
     }
 
     const embed = new EmbedBuilder()
       .setTitle(`${BRAND_EMOJIS.claim} Ticket Claimed`)
-      .setDescription(`This ticket has been claimed by ${member}`)
-      .setColor('#00FF00')
-      .setTimestamp();
-
+      .setDescription(`Claimed by ${member}`)
+      .setColor('#00FF00');
     await interaction.reply({ embeds: [embed] });
   }
 });
 
-// ✅ Handle Accept/Deny Staff Applications
+// ✅ Handle Accept/Deny Staff
 client.on('interactionCreate', async (interaction) => {
   if (interaction.isButton() && interaction.customId.startsWith('deny_staff_')) {
     const userId = interaction.customId.split('_')[2];
@@ -339,12 +375,9 @@ client.on('interactionCreate', async (interaction) => {
       .setTitle('❌ Application Denied')
       .setDescription(user ? `Application from ${user} has been denied.` : 'Application denied.')
       .setColor('#FF0000');
+    await interaction.update({ embeds: [embed], components: [] });
 
-    await interaction.update({ content: '', embeds: [embed], components: [] });
-
-    if (user) {
-      user.send('❌ Your staff application to **Regime Unit** has been denied.').catch(() => {});
-    }
+    if (user) user.send('❌ Your staff application to **Regime Unit** has been denied.').catch(() => {});
   }
 
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('accept_staff_')) {
@@ -353,39 +386,36 @@ client.on('interactionCreate', async (interaction) => {
     const user = await client.users.fetch(userId).catch(() => null);
     const member = await guild.members.fetch(userId).catch(() => null);
 
-    // 🔁 Replace with your actual role IDs
     const roleMap = {
-      moderator: 'MODERATOR_ROLE_ID',   // ← Replace with real role ID
-      helper: 'HELPER_ROLE_ID',         // ← Replace
-      manager: 'MANAGER_ROLE_ID',       // ← Replace
-      admin: 'ADMIN_ROLE_ID',           // ← Replace
+      moderator: 'MODERATOR_ROLE_ID', // ← Replace with real IDs
+      helper: 'HELPER_ROLE_ID',
+      manager: 'MANAGER_ROLE_ID',
+      admin: 'ADMIN_ROLE_ID',
     };
 
-    const rolesAdded = [];
+    const assigned = [];
     if (member) {
-      for (const value of values) {
-        const roleId = roleMap[value];
+      for (const val of values) {
+        const roleId = roleMap[val];
         if (roleId) {
           await member.roles.add(roleId).catch(console.error);
-          rolesAdded.push(`<@&${roleId}>`);
+          assigned.push(`<@&${roleId}>`);
         }
       }
     }
 
-    const rolesList = rolesAdded.length > 0 ? rolesAdded.join(', ') : 'No roles assigned';
+    const assignedList = assigned.length ? assigned.join(', ') : 'No roles assigned';
 
     const embed = new EmbedBuilder()
       .setTitle('✅ Application Accepted')
-      .setDescription(`Application accepted. Assigned: ${rolesList}`)
+      .setDescription(`Accepted. Assigned: ${assignedList}`)
       .setColor('#00FF00');
-
-    await interaction.update({ content: '', embeds: [embed], components: [] });
+    await interaction.update({ embeds: [embed], components: [] });
 
     if (user) {
-      user.send(`🎉 Congratulations! Your application to **Regime Unit** has been accepted. You've been assigned: ${rolesList}`).catch(() => {});
+      user.send(`🎉 Congratulations! Your application to **Regime Unit** has been accepted. You've been assigned: ${assignedList}`).catch(() => {});
     }
   }
 });
 
-// ✅ Login Bot
 client.login(process.env.TOKEN);
