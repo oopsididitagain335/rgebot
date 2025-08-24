@@ -1,0 +1,19 @@
+{
+  "name": "regime-ticket-bot",
+  "version": "1.0.0",
+  "description": "Professional ticket system for Regime Unit with Express server for port binding",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Regime Unit",
+  "license": "MIT"
+}
