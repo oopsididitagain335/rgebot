@@ -12,7 +12,7 @@ const {
 } = require('discord.js');
 const express = require('express');
 
-// 🌐 Express Web Server
+// 🌐 Express Web Server (for hosting platforms)
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -36,12 +36,12 @@ const client = new Client({
 // 🔧 Hardcoded IDs
 const TICKET_CATEGORY_ID = '1408931971811512420'; // Ticket category
 const SUPPORT_ROLE_ID = '1409167134831022242'; // Support role
-const REVIEWER_ROLE_ID = '1408876237266620508'; // Role that can accept/deny staff apps
-const STAFF_APPLICATION_CHANNEL_ID = '1408876437976514633'; // Staff app review channel
+const REVIEWER_ROLE_ID = '1408876237266620508'; // Can review staff apps
+const STAFF_APPLICATION_CHANNEL_ID = '1408876437976514633'; // Staff review channel
 const TICKET_OPEN_LOG_ID = '1408876441164054608'; // Open log
 const TICKET_CLOSE_LOG_ID = '1408876442321686548'; // Close log
 const BANNER_URL = 'https://www.stealthunitgg.xyz/money.png'; // Banner image
-const INVITE_LINK = 'https://discord.gg/Gm877dFGHq'; // Invite to send on accept
+const INVITE_LINK = 'https://discord.gg/Gm877dFGHq'; // Invite (works even if page says JS required)
 
 // 🎟️ Ticket Types
 const TYPES = {
@@ -93,7 +93,7 @@ const STAFF_QUESTIONS = [
   'Resume / Portfolio (link)',
 ];
 
-// 🗂️ Track active applications: channelId → { userId, answers: [] }
+// 🗂️ Track active staff applications
 const activeApplications = new Map();
 
 client.once('ready', () => {
@@ -125,7 +125,7 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// 🎟️ Handle Button Interactions (Create Tickets)
+// 🎟️ Handle Button Clicks (Create Tickets)
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
 
@@ -137,9 +137,7 @@ client.on('interactionCreate', async (interaction) => {
 
   try {
     const category = guild.channels.cache.get(TICKET_CATEGORY_ID);
-    if (!category) {
-      return await interaction.editReply({ content: '❌ Ticket category not found.' });
-    }
+    if (!category) return await interaction.editReply({ content: '❌ Ticket category not found.' });
 
     let permissionOverwrites = [
       { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
@@ -147,21 +145,11 @@ client.on('interactionCreate', async (interaction) => {
     ];
 
     if (customId === TYPES.APPLY_STAFF) {
-      // Only REVIEWER_ROLE can see staff apps
-      permissionOverwrites.push({
-        id: REVIEWER_ROLE_ID,
-        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages],
-      });
-    } else if (customId === TYPES.SUPPORT || customId === TYPES.APPLY_TEAM) {
-      permissionOverwrites.push({
-        id: SUPPORT_ROLE_ID,
-        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages],
-      });
+      permissionOverwrites.push({ id: REVIEWER_ROLE_ID, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] });
+    } else if ([TYPES.SUPPORT, TYPES.APPLY_TEAM].includes(customId)) {
+      permissionOverwrites.push({ id: SUPPORT_ROLE_ID, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] });
     } else if (customId === TYPES.CONTACT_OWNER) {
-      permissionOverwrites.push({
-        id: SUPPORT_ROLE_ID,
-        deny: [PermissionsBitField.Flags.ViewChannel],
-      });
+      permissionOverwrites.push({ id: SUPPORT_ROLE_ID, deny: [PermissionsBitField.Flags.ViewChannel] });
     }
 
     const adminRole = guild.roles.cache.find(r => r.permissions.has(PermissionsBitField.Flags.Administrator));
@@ -205,13 +193,9 @@ client.on('interactionCreate', async (interaction) => {
 
     const row = new ActionRowBuilder().addComponents(closeBtn, claimBtn);
 
-    await ticketChannel.send({
-      content: `<@${user.id}>`,
-      embeds: [ticketEmbed],
-      components: [row],
-    });
+    await ticketChannel.send({ content: `<@${user.id}>`, embeds: [ticketEmbed], components: [row] });
 
-    // 📜 Log open
+    // 📜 Log
     const openLog = guild.channels.cache.get(TICKET_OPEN_LOG_ID);
     if (openLog) {
       const logEmbed = new EmbedBuilder()
@@ -226,19 +210,15 @@ client.on('interactionCreate', async (interaction) => {
       await openLog.send({ embeds: [logEmbed] });
     }
 
-    await interaction.editReply({
-      content: `✅ Ticket created: ${ticketChannel}`,
-      ephemeral: true,
-    });
+    await interaction.editReply({ content: `✅ Ticket created: ${ticketChannel}`, ephemeral: true });
 
-    // 🔹 Start staff Q&A if needed
+    // 🔹 Start staff app Q&A
     if (customId === TYPES.APPLY_STAFF) {
       activeApplications.set(ticketChannel.id, {
         userId: user.id,
         answers: [],
         currentQuestionIndex: 0,
       });
-
       await askNextQuestion(ticketChannel);
     }
   } catch (err) {
@@ -252,12 +232,12 @@ async function askNextQuestion(channel) {
   const app = activeApplications.get(channel.id);
   if (!app || app.currentQuestionIndex >= STAFF_QUESTIONS.length) return;
 
-  const question = STAFF_QUESTIONS[app.currentQuestionIndex];
-  const qNum = app.currentQuestionIndex + 1;
+  const q = STAFF_QUESTIONS[app.currentQuestionIndex];
+  const n = app.currentQuestionIndex + 1;
 
   const embed = new EmbedBuilder()
-    .setTitle(`💼 Staff Application • Question ${qNum}/20`)
-    .setDescription(question)
+    .setTitle(`💼 Staff Application • Question ${n}/20`)
+    .setDescription(q)
     .setColor('#FFD700')
     .setFooter({ text: 'Please reply with your answer.' });
 
@@ -266,15 +246,11 @@ async function askNextQuestion(channel) {
 
 // 📥 Collect answers
 client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
-  if (!message.guild) return;
-
+  if (message.author.bot || !message.guild) return;
   const app = activeApplications.get(message.channel.id);
   if (!app) return;
 
-  const qIndex = app.currentQuestionIndex;
-  app.answers[qIndex] = message.content.trim() || '(No answer provided)';
-
+  app.answers[app.currentQuestionIndex] = message.content.trim() || '(No answer provided)';
   app.currentQuestionIndex++;
 
   if (app.currentQuestionIndex < STAFF_QUESTIONS.length) {
@@ -285,15 +261,12 @@ client.on('messageCreate', async (message) => {
 
     await message.channel.send({
       content: '✅ Thank you! Your application has been submitted for review.',
-      embeds: [
-        new EmbedBuilder()
-          .setTitle('✅ Application Submitted')
-          .setDescription('Staff will review your answers shortly.')
-          .setColor('#00FF00'),
-      ],
+      embeds: [new EmbedBuilder()
+        .setTitle('✅ Application Submitted')
+        .setDescription('Staff will review your answers shortly.')
+        .setColor('#00FF00')]
     });
 
-    // Auto-close after 5 seconds
     setTimeout(() => message.channel.delete().catch(console.error), 5000);
   }
 });
@@ -313,7 +286,6 @@ async function finalizeStaffApplication(channel, userId, answers) {
     .setColor('#FF0000')
     .setTimestamp();
 
-  // Add answers
   answers.forEach((ans, i) => {
     const q = STAFF_QUESTIONS[i];
     appEmbed.addFields({
@@ -327,25 +299,16 @@ async function finalizeStaffApplication(channel, userId, answers) {
     .setLabel('❌ Deny')
     .setStyle(ButtonStyle.Danger);
 
-  // Role selector
   const roles = guild.roles.cache
-    .filter(r =>
-      r.id !== guild.id &&
-      !r.managed &&
-      r.editable &&
-      r.name.toLowerCase() !== 'bot'
-    )
+    .filter(r => r.id !== guild.id && !r.managed && r.editable && r.name.toLowerCase() !== 'bot')
     .sort((a, b) => b.position - a.position)
     .first(25);
 
-  if (roles.size === 0) {
-    console.error('No roles available for assignment');
-    return;
-  }
+  if (roles.size === 0) return console.error('No roles available for assignment.');
 
   const roleOptions = roles.map(r => ({
     label: r.name.substring(0, 80),
-    description: `Pos: ${r.position}`,
+    description: `Position: ${r.position}`,
     value: r.id,
   }));
 
@@ -354,85 +317,77 @@ async function finalizeStaffApplication(channel, userId, answers) {
     .setPlaceholder('✅ Accept & Assign Role')
     .addOptions(roleOptions);
 
-  const actionRow1 = new ActionRowBuilder().addComponents(denyBtn);
-  const actionRow2 = new ActionRowBuilder().addComponents(roleMenu);
-
   const staffChannel = client.channels.cache.get(STAFF_APPLICATION_CHANNEL_ID);
   if (staffChannel) {
     await staffChannel.send({
       content: `<@&${REVIEWER_ROLE_ID}>`,
       embeds: [appEmbed],
-      components: [actionRow1, actionRow2],
+      components: [
+        new ActionRowBuilder().addComponents(denyBtn),
+        new ActionRowBuilder().addComponents(roleMenu),
+      ],
     });
-  } else {
-    console.error('Staff application channel not found.');
   }
 }
 
-// ✅ Handle Accept/Deny
+// ✅ Accept / ❌ Deny
 client.on('interactionCreate', async (interaction) => {
-  if (interaction.isButton()) {
-    if (interaction.customId.startsWith('deny_staff_')) {
-      const userId = interaction.customId.split('_')[2];
-      const user = await client.users.fetch(userId).catch(() => null);
+  // ❌ Deny
+  if (interaction.isButton() && interaction.customId.startsWith('deny_staff_')) {
+    const userId = interaction.customId.split('_')[2];
+    const user = await client.users.fetch(userId).catch(() => null);
 
-      const embed = new EmbedBuilder()
-        .setTitle('❌ Application Denied')
-        .setDescription(user ? `Application from ${user} has been denied.` : 'Application denied.')
-        .setColor('#FF0000');
+    const embed = new EmbedBuilder()
+      .setTitle('❌ Application Denied')
+      .setDescription(user ? `Application from ${user} has been denied.` : 'Application denied.')
+      .setColor('#FF0000');
 
-      await interaction.update({ embeds: [embed], components: [] });
+    await interaction.update({ embeds: [embed], components: [] });
 
-      if (user) {
-        user.send('❌ Your staff application was denied.').catch(() => {});
-      }
-    }
+    if (user) user.send('❌ Your staff application was denied.').catch(() => {});
   }
 
-  if (interaction.isStringSelectMenu()) {
-    if (interaction.customId.startsWith('accept_staff_')) {
-      const userId = interaction.customId.split('_')[2];
-      const selectedRoleId = interaction.values[0];
-      const user = await client.users.fetch(userId).catch(() => null);
-      const member = await interaction.guild.members.fetch(userId).catch(() => null);
-      const role = await interaction.guild.roles.fetch(selectedRoleId);
+  // ✅ Accept & Assign Role
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith('accept_staff_')) {
+    const userId = interaction.customId.split('_')[2];
+    const selectedRoleId = interaction.values[0];
+    const user = await client.users.fetch(userId).catch(() => null);
+    const member = await interaction.guild.members.fetch(userId).catch(() => null);
+    const role = await interaction.guild.roles.fetch(selectedRoleId);
 
-      const roleName = role ? role.name : 'Unknown Role';
+    const roleName = role ? role.name : 'Unknown Role';
 
-      const embed = new EmbedBuilder()
-        .setTitle('✅ Application Accepted')
-        .setDescription(`Accepted and assigned: **${roleName}**`)
-        .setColor('#00FF00');
+    const embed = new EmbedBuilder()
+      .setTitle('✅ Application Accepted')
+      .setDescription(`Accepted and assigned: **${roleName}**`)
+      .setColor('#00FF00');
 
-      await interaction.update({ embeds: [embed], components: [] });
+    await interaction.update({ embeds: [embed], components: [] });
 
-      if (member && role) {
-        await member.roles.add(role).catch(console.error);
-      }
+    if (member && role) await member.roles.add(role).catch(console.error);
 
-      if (user) {
-        user.send(`🎉 Congratulations! You've been accepted as staff.\n\n🔗 Join the team: ${INVITE_LINK}`).catch(() => {});
-      }
+    if (user) {
+      const displayName = role ? `**${role.name}**` : 'a team member';
+      user.send(`🎉 Congratulations! You've been accepted as ${displayName}.\n\n🔗 Join the team: ${INVITE_LINK}`).catch(() => {});
     }
   }
 });
 
-// 🔒 Handle Close & Claim Ticket Buttons
+// 🔒 Close & Claim
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
 
   const { customId, channel, member, guild } = interaction;
 
   if (customId === 'close_ticket') {
-    if (!channel.name.startsWith('ticket-')) {
-      return await interaction.reply({ content: '❌ This is not a ticket channel.', ephemeral: true });
-    }
+    if (!channel.name.startsWith('ticket-')) return interaction.reply({ content: '❌ Not a ticket!', ephemeral: true });
 
-    const embed = new EmbedBuilder()
-      .setTitle('🔒 Closing Ticket')
-      .setDescription('Deleting in 5 seconds...')
-      .setColor('#FF0000');
-    await interaction.reply({ embeds: [embed] });
+    await interaction.reply({
+      embeds: [new EmbedBuilder()
+        .setTitle('🔒 Closing Ticket')
+        .setDescription('Deleting in 5 seconds...')
+        .setColor('#FF0000')]
+    });
 
     const logChannel = guild.channels.cache.get(TICKET_CLOSE_LOG_ID);
     if (logChannel) {
@@ -451,16 +406,14 @@ client.on('interactionCreate', async (interaction) => {
   if (customId === 'claim_ticket') {
     const hasSupport = member.roles.cache.has(SUPPORT_ROLE_ID);
     const isAdmin = member.permissions.has(PermissionsBitField.Flags.Administrator);
+    if (!hasSupport && !isAdmin) return interaction.reply({ content: '❌ No permission.', ephemeral: true });
 
-    if (!hasSupport && !isAdmin) {
-      return await interaction.reply({ content: '❌ You do not have permission to claim this ticket.', ephemeral: true });
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle('🔖 Ticket Claimed')
-      .setDescription(`Claimed by ${member}`)
-      .setColor('#00FF00');
-    await interaction.reply({ embeds: [embed] });
+    await interaction.reply({
+      embeds: [new EmbedBuilder()
+        .setTitle('🔖 Ticket Claimed')
+        .setDescription(`Claimed by ${member}`)
+        .setColor('#00FF00')]
+    });
   }
 });
 
