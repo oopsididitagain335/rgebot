@@ -15,7 +15,7 @@ const {
 } = require('discord.js');
 const express = require('express');
 
-// 🌐 Express Web Server (for hosting platforms)
+// 🌐 Express Web Server (for hosting platforms like Replit/Heroku)
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -43,7 +43,7 @@ const STAFF_APPLICATION_CHANNEL_ID = '1408876357529768130'; // Staff review
 const SUPPORT_ROLE_ID = '1409167134831022242'; // Support role
 const TICKET_OPEN_LOG_ID = '1408876441164054608'; // Open log
 const TICKET_CLOSE_LOG_ID = '1408876442321686548'; // Close log
-const BANNER_URL = 'https://www.stealthunitgg.xyz/money.png'; // Banner image only
+const BANNER_URL = 'https://www.stealthunitgg.xyz/money.png'; // Banner image (trimmed)
 
 // 🎟️ Ticket Types
 const TYPES = {
@@ -69,6 +69,19 @@ const TICKET_TYPE_NAMES = {
   [TYPES.SUPPORT]: 'Support',
   [TYPES.CONTACT_OWNER]: 'Contact Owner',
 };
+
+// 🗂️ Track pending staff applications (userId → timestamp)
+const pendingStaffApplications = new Map();
+
+// Clean up old entries every minute
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, timestamp] of pendingStaffApplications) {
+    if (now - timestamp > 10 * 60 * 1000) { // 10 minutes
+      pendingStaffApplications.delete(userId);
+    }
+  }
+}, 60000);
 
 client.once('ready', () => {
   console.log(`✅ ${client.user.tag} is online and ready!`);
@@ -99,13 +112,13 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// 🎟️ Handle Button Interactions
+// 🎟️ Handle Button Interactions (Create Tickets & Open Staff Modal)
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
 
   const { customId, user, guild, member } = interaction;
 
-  // Handle Apply Staff — showModal() must be the FIRST response
+  // 🔹 Handle Apply Staff: Open Modal
   if (customId === TYPES.APPLY_STAFF) {
     try {
       const dmChannel = await user.createDM().catch(() => null);
@@ -120,7 +133,6 @@ client.on('interactionCreate', async (interaction) => {
         .setCustomId('apply_staff_modal')
         .setTitle('💼 Staff Application');
 
-      // ✅ 20 Questions (19 short + 1 resume)
       const questions = [
         'Why do you want to join the staff?',
         'How much time can you dedicate weekly?',
@@ -169,24 +181,22 @@ client.on('interactionCreate', async (interaction) => {
 
       modal.addComponents(...rows);
 
-      // ✅ showModal() — must be first and only response
+      // Track that this user opened the modal
+      pendingStaffApplications.set(user.id, Date.now());
+
+      // Show modal (must be first reply)
       await interaction.showModal(modal);
-
-      // Store user ID
-      client.application.set('pendingStaffApp', user.id);
-
     } catch (err) {
       console.error(err);
       await interaction.reply({
-        content: '❌ An error occurred.',
+        content: '❌ An error occurred while opening the form.',
         ephemeral: true,
       });
     }
-
-    return; // Exit — showModal() sent
+    return;
   }
 
-  // Handle other ticket types
+  // 🔹 Handle Other Ticket Types
   if (![TYPES.APPLY_TEAM, TYPES.SUPPORT, TYPES.CONTACT_OWNER].includes(customId)) return;
 
   await interaction.deferReply({ ephemeral: true });
@@ -208,6 +218,7 @@ client.on('interactionCreate', async (interaction) => {
         allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages],
       });
     } else if (customId === TYPES.CONTACT_OWNER) {
+      // Owner tickets hide from support
       permissionOverwrites.push({
         id: SUPPORT_ROLE_ID,
         deny: [PermissionsBitField.Flags.ViewChannel],
@@ -262,7 +273,7 @@ client.on('interactionCreate', async (interaction) => {
       components: [row],
     });
 
-    // 📜 Log open
+    // 📜 Log ticket open
     const openLog = guild.channels.cache.get(TICKET_OPEN_LOG_ID);
     if (openLog) {
       const logEmbed = new EmbedBuilder()
@@ -287,15 +298,25 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// 📝 Handle Apply Staff Modal
+// 📝 Handle Apply Staff Modal Submission
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isModalSubmit() || interaction.customId !== 'apply_staff_modal') return;
 
   const userId = interaction.user.id;
-  if (client.application.get('pendingStaffApp') !== userId) return;
+
+  // Verify user started the application
+  if (!pendingStaffApplications.has(userId)) {
+    return await interaction.reply({
+      content: '❌ You must click the "Apply Staff" button first.',
+      ephemeral: true,
+    });
+  }
 
   await interaction.deferReply({ ephemeral: true });
 
+  const guild = interaction.guild;
+
+  // Collect answers
   const responses = [];
   for (let i = 1; i <= 19; i++) {
     const value = interaction.fields.getTextInputValue(`q${i}`);
@@ -307,7 +328,7 @@ client.on('interactionCreate', async (interaction) => {
   const fullResponse = responses.join('\n');
 
   try {
-    // 📩 Send to user's DM
+    // 📩 Send copy to user's DM
     const dm = await interaction.user.createDM();
     const dmEmbed = new EmbedBuilder()
       .setTitle('💼 Your Staff Application')
@@ -320,7 +341,7 @@ client.on('interactionCreate', async (interaction) => {
     // 📥 Send to staff channel
     const staffChannel = client.channels.cache.get(STAFF_APPLICATION_CHANNEL_ID);
     if (!staffChannel) {
-      return await interaction.editReply({ content: '❌ Staff channel not found.' });
+      return await interaction.editReply({ content: '❌ Staff application channel not found.' });
     }
 
     const appEmbed = new EmbedBuilder()
@@ -333,23 +354,30 @@ client.on('interactionCreate', async (interaction) => {
       .setColor('#FF0000')
       .setTimestamp();
 
+    // Deny button
     const denyBtn = new ButtonBuilder()
       .setCustomId(`deny_staff_${userId}`)
       .setLabel('❌ Deny')
       .setStyle(ButtonStyle.Danger);
 
-    // ✅ Dynamically fetch roles (excluding @everyone and bots)
+    // Role selection menu
     const roles = guild.roles.cache
-      .filter(r => r.id !== guild.id && !r.managed && r.editable && r.name.toLowerCase() !== 'bot')
+      .filter(r =>
+        r.id !== guild.id &&           // Not @everyone
+        !r.managed &&                  // Not bot/integration role
+        r.editable &&                  // Bot can edit it
+        r.name.toLowerCase() !== 'bot' // Optional filter
+      )
       .sort((a, b) => b.position - a.position)
-      .first(25); // Max 25 options
+      .first(25); // Max 25 roles for menu
 
     if (roles.size === 0) {
       return await interaction.editReply({ content: '❌ No assignable roles found.' });
     }
 
     const roleOptions = roles.map(r => ({
-      label: r.name,
+      label: r.name.substring(0, 80), // Max label length
+      description: `Position: ${r.position}`,
       value: r.id,
     }));
 
@@ -367,99 +395,15 @@ client.on('interactionCreate', async (interaction) => {
       components: [actionRow1, actionRow2],
     });
 
+    // Confirm to user
     await interaction.editReply({ content: '✅ Your application has been submitted for review!' });
+
+    // Cleanup
+    pendingStaffApplications.delete(userId);
   } catch (err) {
     console.error(err);
     await interaction.editReply({ content: '❌ Failed to submit application.' });
   }
 });
 
-// 🛠️ Handle Close & Claim
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isButton()) return;
-
-  const { customId, channel, member, guild } = interaction;
-
-  if (customId === 'close_ticket') {
-    if (!channel.name.startsWith('ticket-')) {
-      return interaction.reply({ content: '❌ Not a ticket!', ephemeral: true });
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle('🔒 Closing Ticket')
-      .setDescription('Deleting in 5 seconds...')
-      .setColor('#FF0000');
-    await interaction.reply({ embeds: [embed] });
-
-    const logChannel = guild.channels.cache.get(TICKET_CLOSE_LOG_ID);
-    if (logChannel) {
-      const logEmbed = new EmbedBuilder()
-        .setTitle('🗑️ Ticket Closed')
-        .setDescription(`**Channel:** ${channel}\n**Closed by:** ${member}`)
-        .addFields({ name: '📁 Category', value: channel.parent?.name || 'None', inline: true })
-        .setColor('#FF4500')
-        .setTimestamp();
-      await logChannel.send({ embeds: [logEmbed] });
-    }
-
-    setTimeout(() => channel.delete().catch(console.error), 5000);
-  }
-
-  if (customId === 'claim_ticket') {
-    const hasSupport = member.roles.cache.has(SUPPORT_ROLE_ID);
-    const isAdmin = member.permissions.has(PermissionsBitField.Flags.Administrator);
-
-    if (!hasSupport && !isAdmin) {
-      return interaction.reply({ content: '❌ No permission.', ephemeral: true });
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle('🔖 Ticket Claimed')
-      .setDescription(`Claimed by ${member}`)
-      .setColor('#00FF00');
-    await interaction.reply({ embeds: [embed] });
-  }
-});
-
-// ✅ Handle Accept/Deny Staff
-client.on('interactionCreate', async (interaction) => {
-  if (interaction.isButton() && interaction.customId.startsWith('deny_staff_')) {
-    const userId = interaction.customId.split('_')[2];
-    const user = await client.users.fetch(userId).catch(() => null);
-
-    const embed = new EmbedBuilder()
-      .setTitle('❌ Application Denied')
-      .setDescription(user ? `Application from ${user} has been denied.` : 'Denied.')
-      .setColor('#FF0000');
-    await interaction.update({ embeds: [embed], components: [] });
-
-    if (user) user.send('❌ Your application was denied.').catch(() => {});
-  }
-
-  if (interaction.isStringSelectMenu() && interaction.customId.startsWith('accept_staff_')) {
-    const userId = interaction.customId.split('_')[2];
-    const selectedRoleIds = interaction.values;
-    const user = await client.users.fetch(userId).catch(() => null);
-    const member = await guild.members.fetch(userId).catch(() => null);
-
-    const roleMentions = selectedRoleIds.map(id => `<@&${id}>`).join(', ');
-
-    const embed = new EmbedBuilder()
-      .setTitle('✅ Application Accepted')
-      .setDescription(`Accepted. Assigned: ${roleMentions}`)
-      .setColor('#00FF00');
-    await interaction.update({ embeds: [embed], components: [] });
-
-    if (member) {
-      for (const roleId of selectedRoleIds) {
-        await member.roles.add(roleId).catch(console.error);
-      }
-    }
-
-    if (user) {
-      user.send(`🎉 Congratulations! You've been accepted as staff and assigned: ${roleMentions}`).catch(() => {});
-    }
-  }
-});
-
-client.login(process.env.TOKEN);
+// 🔒 Handle Close & Claim Ticket 
