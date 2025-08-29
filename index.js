@@ -33,7 +33,7 @@ const client = new Client({
 const CONFIG = {
   LOG_OPEN: '1408876441164054608',
   LOG_CLOSE: '1408876442321686548',
-  LOG_PURCHASE: '1410995321206738964',
+  LOG_PURCHASE: '1410995321206738964', // ✅ All purchase requests go here
   LOG_SCAM: '1410999473513173003',
   ROLES: {
     SUPPORT: '1410995216810377337',
@@ -302,17 +302,20 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    // === PURCHASE TYPES: Show Modal (Only for Purchase Bot/Website)
+    // === PURCHASE TYPES: Show Modal with Prefilled Product ===
     const modal = new ModalBuilder()
       .setCustomId(`purchase_${type}`)
       .setTitle('Purchase Request');
+
+    // ✅ Prefill based on button clicked
+    const productValue = type === TYPES.PURCHASE_BOT ? 'Discord Bot' : 'Website Development';
 
     const productInput = new TextInputBuilder()
       .setCustomId('product')
       .setLabel('What are you buying?')
       .setStyle(TextInputStyle.Short)
       .setRequired(true)
-      .setPlaceholder('e.g. Discord Bot, Website Template');
+      .setValue(productValue); // ✅ Prefilled!
 
     const budgetInput = new TextInputBuilder()
       .setCustomId('budget')
@@ -338,7 +341,7 @@ client.on('interactionCreate', async (interaction) => {
       new ActionRowBuilder().addComponents(detailsInput)
     );
 
-    // ✅ Only show modal — no reply before or after
+    // ✅ Show modal — only reply
     await interaction.showModal(modal);
     return;
   }
@@ -410,7 +413,7 @@ client.on('interactionCreate', async (interaction) => {
 
       await ticketChannel.send({ content: `<@${interaction.user.id}>`, embeds: [ticketEmbed], components: [row] });
 
-      // Log to purchase log
+      // ✅ LOG EVERY PURCHASE REQUEST TO 1410995321206738964
       const logEmbed = new EmbedBuilder()
         .setTitle('💎 Purchase Request Submitted')
         .addFields(
