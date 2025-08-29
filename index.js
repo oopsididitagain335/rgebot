@@ -33,7 +33,7 @@ const client = new Client({
 const CONFIG = {
   LOG_OPEN: '1408876441164054608',
   LOG_CLOSE: '1408876442321686548',
-  LOG_PURCHASE: '1410995321206738964',
+  LOG_PURCHASE: '1410995321206738964', // Logs purchase requests (with over-minimum)
   LOG_SCAM: '1410999473513173003',
   ROLES: {
     SUPPORT: '1410995216810377337',
@@ -228,7 +228,13 @@ client.on('interactionCreate', async (interaction) => {
     if (type === 'close_ticket') {
       await interaction.reply('🔒 Closing ticket in 5s...');
       const log = interaction.guild.channels.cache.get(CONFIG.LOG_CLOSE);
-      if (log) log.send({ embeds: [new EmbedBuilder().setTitle('🗑️ Ticket Closed').setDescription(`Channel: ${interaction.channel}\nClosed by: ${interaction.user}`).setColor('#FF0000').setTimestamp()] });
+      if (log) log.send({
+        embeds: [new EmbedBuilder()
+          .setTitle('🗑️ Ticket Closed')
+          .setDescription(`Channel: ${interaction.channel}\nClosed by: ${interaction.user}`)
+          .setColor('#FF0000')
+          .setTimestamp()]
+      });
       setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
       return;
     }
@@ -279,7 +285,13 @@ client.on('interactionCreate', async (interaction) => {
 
     // Log ticket open
     const logChannel = interaction.guild.channels.cache.get(CONFIG.LOG_OPEN);
-    if (logChannel) logChannel.send({ embeds: [new EmbedBuilder().setTitle('🎫 Ticket Opened').setDescription(`Type: **${TYPE_NAMES[type]}**\nChannel: ${ticketChannel}`).setColor('#00FF00').setTimestamp()] });
+    if (logChannel) logChannel.send({
+      embeds: [new EmbedBuilder()
+        .setTitle('🎫 Ticket Opened')
+        .setDescription(`Type: **${TYPE_NAMES[type]}**\nChannel: ${ticketChannel}`)
+        .setColor('#00FF00')
+        .setTimestamp()]
+    });
 
     await interaction.reply({ content: `✅ Ticket created: ${ticketChannel}`, ephemeral: true });
 
@@ -299,19 +311,26 @@ client.on('interactionCreate', async (interaction) => {
         .setCustomId('product')
         .setLabel('What are you buying?')
         .setStyle(TextInputStyle.Short)
-        .setRequired(true);
+        .setRequired(true)
+        .setPlaceholder('e.g. Discord Bot, Website Template');
 
       const budgetInput = new TextInputBuilder()
         .setCustomId('budget')
-        .setLabel(type === TYPES.PURCHASE_BOT ? 'Your budget (£15+ required)' : 'Your budget (£10+ required)')
+        .setLabel('What is your budget?')
         .setStyle(TextInputStyle.Short)
-        .setRequired(true);
+        .setRequired(true)
+        .setPlaceholder(
+          type === TYPES.PURCHASE_BOT
+            ? 'Minimum £15 (e.g. 20, 30, 50)'
+            : 'Minimum £10 (e.g. 15, 25)'
+        );
 
       const detailsInput = new TextInputBuilder()
         .setCustomId('details')
         .setLabel('Any extra details?')
         .setStyle(TextInputStyle.Paragraph)
-        .setRequired(false);
+        .setRequired(false)
+        .setPlaceholder('Timeline, features, etc.');
 
       modal.addComponents(
         new ActionRowBuilder().addComponents(productInput),
@@ -327,33 +346,54 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.isModalSubmit() && interaction.customId.startsWith('purchase_')) {
     const type = interaction.customId.replace('purchase_', '');
     const product = interaction.fields.getTextInputValue('product');
-    const budget = parseFloat(interaction.fields.getTextInputValue('budget').replace('£',''));
+    const budgetText = interaction.fields.getTextInputValue('budget');
     const details = interaction.fields.getTextInputValue('details') || '(No details)';
-    const logChannel = interaction.guild.channels.cache.get(CONFIG.LOG_PURCHASE);
 
-    // Validate budget
-    if ((type === TYPES.PURCHASE_BOT && budget < 15) || (type === TYPES.PURCHASE_WEBSITE && budget < 10)) {
-      return interaction.reply({ content: `❌ Your budget is too low for ${TYPE_NAMES[type]}.`, ephemeral: true });
+    // Parse budget safely
+    const budget = parseFloat(budgetText.replace(/[^\d.]/g, ''));
+    if (isNaN(budget)) {
+      return interaction.reply({
+        content: '❌ Please enter a valid number for your budget (e.g. 15, 20.50).',
+        ephemeral: true,
+      });
     }
 
-    // Log purchase request
+    const minBudget = type === TYPES.PURCHASE_BOT ? 15 : 10;
+    const overBudget = Math.max(0, budget - minBudget);
+
+    if (budget < minBudget) {
+      return interaction.reply({
+        content: `❌ Your budget (£${budget}) is below the minimum for this service.\n> 📌 Minimum: **£${minBudget}**\n> 💡 Consider increasing your budget to proceed.`,
+        ephemeral: true,
+      });
+    }
+
+    // ✅ Log purchase request with over-minimum info
+    const logChannel = interaction.guild.channels.cache.get(CONFIG.LOG_PURCHASE);
     if (logChannel) {
       const embed = new EmbedBuilder()
-        .setTitle('💎 Purchase Request')
+        .setTitle('💎 Purchase Request Submitted')
         .addFields(
-          { name: 'User', value: `<@${interaction.user.id}>` },
-          { name: 'Product', value: product },
-          { name: 'Budget', value: `£${budget}` },
-          { name: 'Extra Info', value: details },
-          { name: 'Type', value: TYPE_NAMES[type] }
+          { name: '👤 User', value: `<@${interaction.user.id}>`, inline: true },
+          { name: '📌 Request Type', value: TYPE_NAMES[type], inline: true },
+          { name: '📦 Product', value: product },
+          { name: '💷 Budget Offered', value: `£${budget.toFixed(2)}`, inline: true },
+          { name: '✅ Minimum Required', value: `£${minBudget}`, inline: true },
+          { name: '📈 Above Minimum', value: `£${overBudget.toFixed(2)}`, inline: true },
+          { name: '📄 Details', value: details }
         )
-        .setColor(CONFIG.BRAND.COLOR)
+        .setColor('#00FF00')
         .setTimestamp()
         .setFooter({ text: CONFIG.BRAND.NAME });
+
       logChannel.send({ embeds: [embed] });
     }
 
-    await interaction.reply({ content: '✅ Your purchase request has been submitted!', ephemeral: true });
+    // Confirm to user
+    await interaction.reply({
+      content: `✅ Thank you! Your **${TYPE_NAMES[type]}** request has been submitted.\n> 💵 Budget: **£${budget}** (✓ £${overBudget} above minimum)`,
+      ephemeral: true,
+    });
   }
 });
 
