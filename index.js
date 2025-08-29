@@ -44,8 +44,8 @@ const CONFIG = {
     NAME: 'Dev Hub',
     COLOR: '#000000',
     EMOJIS: {
-      purchase_basic: '💎',
-      purchase_premium: '💰',
+      purchase_bot: '💎',
+      purchase_website: '💰',
       support: '🛠️',
       contact_owner: '👑',
       apply_staff: '💼',
@@ -57,16 +57,16 @@ const CONFIG = {
 
 // 🎟️ Ticket Types
 const TYPES = {
-  PURCHASE_BASIC: 'purchase_basic',
-  PURCHASE_PREMIUM: 'purchase_premium',
+  PURCHASE_BOT: 'purchase_bot',
+  PURCHASE_WEBSITE: 'purchase_website',
   SUPPORT: 'support',
   CONTACT_OWNER: 'contact_owner',
   APPLY_STAFF: 'apply_staff',
 };
 
 const TYPE_NAMES = {
-  [TYPES.PURCHASE_BASIC]: 'Purchase Basic',
-  [TYPES.PURCHASE_PREMIUM]: 'Purchase Premium',
+  [TYPES.PURCHASE_BOT]: 'Purchase Bot',
+  [TYPES.PURCHASE_WEBSITE]: 'Purchase Website',
   [TYPES.SUPPORT]: 'Support',
   [TYPES.CONTACT_OWNER]: 'Contact Owner',
   [TYPES.APPLY_STAFF]: 'Moderator Application',
