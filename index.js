@@ -33,7 +33,7 @@ const client = new Client({
 const CONFIG = {
   LOG_OPEN: '1408876441164054608',
   LOG_CLOSE: '1408876442321686548',
-  LOG_PURCHASE: '1410995321206738964', // Logs purchase requests (with over-minimum)
+  LOG_PURCHASE: '1410995321206738964',
   LOG_SCAM: '1410999473513173003',
   ROLES: {
     SUPPORT: '1410995216810377337',
@@ -88,6 +88,14 @@ const activeApplications = new Map();
 
 // ✅ Ready
 client.once('ready', () => console.log(`✅ ${client.user.tag} is online!`));
+
+// 🛠️ Logging Helper
+function logAction(guild, logChannelId, embed) {
+  const channel = guild.channels.cache.get(logChannelId);
+  if (channel) {
+    channel.send({ embeds: [embed] }).catch(err => console.error(`Failed to log to ${logChannelId}:`, err));
+  }
+}
 
 // 🛠️ Helpers
 async function ensureCategory(guild, typeName) {
@@ -162,16 +170,13 @@ client.on('messageCreate', async (msg) => {
     // ✅ Purchase logging
     if (args[0] === '!purchase' && args[1] && args[2]) {
       const [_, status, userId] = args;
-      const logChannel = msg.guild.channels.cache.get(CONFIG.LOG_PURCHASE);
-      if (logChannel) {
-        const embed = new EmbedBuilder()
-          .setTitle('💎 Purchase Update')
-          .setDescription(`**Status:** ${status.toUpperCase()}\n**User:** <@${userId}>`)
-          .setColor(status.toLowerCase() === 'success' ? 'GREEN' : 'RED')
-          .setTimestamp()
-          .setFooter({ text: CONFIG.BRAND.NAME });
-        logChannel.send({ embeds: [embed] });
-      }
+      const embed = new EmbedBuilder()
+        .setTitle('💎 Purchase Update')
+        .setDescription(`**Status:** ${status.toUpperCase()}\n**User:** <@${userId}>`)
+        .setColor(status.toLowerCase() === 'success' ? 'GREEN' : 'RED')
+        .setTimestamp()
+        .setFooter({ text: CONFIG.BRAND.NAME });
+      logAction(msg.guild, CONFIG.LOG_PURCHASE, embed);
       msg.reply(`✅ Logged purchase status: ${status}`);
     }
 
@@ -179,20 +184,17 @@ client.on('messageCreate', async (msg) => {
     if (args[0] === '!scammer' && args[1]) {
       const userId = args[1].replace(/[<@!>]/g, '');
       const reason = args.slice(2).join(' ') || 'No reason provided';
-      const logChannel = msg.guild.channels.cache.get(CONFIG.LOG_SCAM);
-      if (logChannel) {
-        const embed = new EmbedBuilder()
-          .setTitle('⚠️ Scammer Report')
-          .addFields(
-            { name: 'User', value: `<@${userId}>`, inline: true },
-            { name: 'Reported By', value: `<@${msg.author.id}>`, inline: true },
-            { name: 'Reason', value: reason }
-          )
-          .setColor('#FF0000')
-          .setTimestamp()
-          .setFooter({ text: CONFIG.BRAND.NAME });
-        logChannel.send({ embeds: [embed] });
-      }
+      const embed = new EmbedBuilder()
+        .setTitle('⚠️ Scammer Report')
+        .addFields(
+          { name: 'User', value: `<@${userId}>`, inline: true },
+          { name: 'Reported By', value: `<@${msg.author.id}>`, inline: true },
+          { name: 'Reason', value: reason }
+        )
+        .setColor('#FF0000')
+        .setTimestamp()
+        .setFooter({ text: CONFIG.BRAND.NAME });
+      logAction(msg.guild, CONFIG.LOG_SCAM, embed);
       msg.reply(`✅ Marked <@${userId}> as a scammer. Reason: ${reason}`);
     }
   }
@@ -216,184 +218,223 @@ client.on('messageCreate', async (msg) => {
   }
 });
 
-// 🎟️ Ticket buttons and modals
+// 🎟️ Interaction Handler (Buttons & Modals)
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isButton() && !interaction.isModalSubmit()) return;
-
   // === BUTTONS ===
   if (interaction.isButton()) {
     const type = interaction.customId;
 
     // Close Ticket
     if (type === 'close_ticket') {
-      await interaction.reply('🔒 Closing ticket in 5s...');
-      const log = interaction.guild.channels.cache.get(CONFIG.LOG_CLOSE);
-      if (log) log.send({
-        embeds: [new EmbedBuilder()
-          .setTitle('🗑️ Ticket Closed')
-          .setDescription(`Channel: ${interaction.channel}\nClosed by: ${interaction.user}`)
-          .setColor('#FF0000')
-          .setTimestamp()]
-      });
-      setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
+      await interaction.reply('🔒 Closing ticket in 5 seconds...');
+      const embed = new EmbedBuilder()
+        .setTitle('🗑️ Ticket Closed')
+        .setDescription(`Channel: ${interaction.channel}\nClosed by: ${interaction.user}`)
+        .setColor('#FF0000')
+        .setTimestamp();
+      logAction(interaction.guild, CONFIG.LOG_CLOSE, embed);
+      setTimeout(() => interaction.channel.delete().catch(console.error), 5000);
       return;
     }
 
     // Claim Ticket
     if (type === 'claim_ticket') {
       if (!interaction.member.roles.cache.has(CONFIG.ROLES.SUPPORT)) {
-        return interaction.reply({ content: '❌ Cannot claim ticket.', ephemeral: true });
+        return interaction.reply({ content: '❌ You do not have permission to claim this ticket.', ephemeral: true });
       }
-      return interaction.reply(`🔖 Ticket claimed by ${interaction.user}`);
+      return interaction.reply({ content: `🔖 Ticket claimed by ${interaction.user}`, ephemeral: true });
     }
 
-    // Only continue for valid ticket types
+    // Handle valid ticket types
     if (!Object.values(TYPES).includes(type)) return;
 
-    const category = await ensureCategory(interaction.guild, TYPE_NAMES[type]);
-    const roleId = getRoleForType(type);
+    // For SUPPORT, CONTACT_OWNER, APPLY_STAFF → create ticket now
+    if (![TYPES.PURCHASE_BOT, TYPES.PURCHASE_WEBSITE].includes(type)) {
+      const category = await ensureCategory(interaction.guild, TYPE_NAMES[type]);
+      const roleId = getRoleForType(type);
 
-    const overwrites = [
-      { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-      { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-    ];
-    if (roleId) overwrites.push({ id: roleId, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] });
+      const overwrites = [
+        { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+        { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+      ];
+      if (roleId) overwrites.push({ id: roleId, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] });
 
-    const ticketChannel = await interaction.guild.channels.create({
-      name: `${type}-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
-      type: ChannelType.GuildText,
-      parent: category,
-      permissionOverwrites: overwrites,
-      topic: `User: ${interaction.user.tag} | Type: ${type}`,
-    });
+      const ticketChannel = await interaction.guild.channels.create({
+        name: `${type}-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+        type: ChannelType.GuildText,
+        parent: category,
+        permissionOverwrites: overwrites,
+        topic: `User: ${interaction.user.tag} | Type: ${type}`,
+      });
 
-    const ticketEmbed = new EmbedBuilder()
-      .setTitle(`${CONFIG.BRAND.EMOJIS[type]} ${TYPE_NAMES[type]} Ticket`)
-      .addFields(
-        { name: '👤 User', value: `<@${interaction.user.id}>`, inline: true },
-        { name: '📁 Type', value: TYPE_NAMES[type], inline: true }
-      )
-      .setColor(CONFIG.BRAND.COLOR)
-      .setFooter({ text: CONFIG.BRAND.NAME });
+      const ticketEmbed = new EmbedBuilder()
+        .setTitle(`${CONFIG.BRAND.EMOJIS[type]} ${TYPE_NAMES[type]} Ticket`)
+        .addFields(
+          { name: '👤 User', value: `<@${interaction.user.id}>`, inline: true },
+          { name: '📁 Type', value: TYPE_NAMES[type], inline: true }
+        )
+        .setColor(CONFIG.BRAND.COLOR)
+        .setFooter({ text: CONFIG.BRAND.NAME });
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('close_ticket').setLabel('Close Ticket').setStyle(ButtonStyle.Danger).setEmoji(CONFIG.BRAND.EMOJIS.close),
-      new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim Ticket').setStyle(ButtonStyle.Primary).setEmoji(CONFIG.BRAND.EMOJIS.claim)
-    );
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('close_ticket').setLabel('Close Ticket').setStyle(ButtonStyle.Danger).setEmoji(CONFIG.BRAND.EMOJIS.close),
+        new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim Ticket').setStyle(ButtonStyle.Primary).setEmoji(CONFIG.BRAND.EMOJIS.claim)
+      );
 
-    await ticketChannel.send({ content: `<@${interaction.user.id}>`, embeds: [ticketEmbed], components: [row] });
+      await ticketChannel.send({ content: `<@${interaction.user.id}>`, embeds: [ticketEmbed], components: [row] });
 
-    // Log ticket open
-    const logChannel = interaction.guild.channels.cache.get(CONFIG.LOG_OPEN);
-    if (logChannel) logChannel.send({
-      embeds: [new EmbedBuilder()
+      // Log ticket open
+      const embed = new EmbedBuilder()
         .setTitle('🎫 Ticket Opened')
         .setDescription(`Type: **${TYPE_NAMES[type]}**\nChannel: ${ticketChannel}`)
         .setColor('#00FF00')
-        .setTimestamp()]
-    });
+        .setTimestamp();
+      logAction(interaction.guild, CONFIG.LOG_OPEN, embed);
 
-    await interaction.reply({ content: `✅ Ticket created: ${ticketChannel}`, ephemeral: true });
+      await interaction.reply({ content: `✅ Ticket created: ${ticketChannel}`, ephemeral: true });
 
-    // Staff application
-    if (type === TYPES.APPLY_STAFF) {
-      activeApplications.set(ticketChannel.id, { userId: interaction.user.id, answers: [], index: 0 });
-      askNextQuestion(ticketChannel);
+      // Start staff app flow
+      if (type === TYPES.APPLY_STAFF) {
+        activeApplications.set(ticketChannel.id, { userId: interaction.user.id, answers: [], index: 0 });
+        askNextQuestion(ticketChannel);
+      }
+
+      return;
     }
 
-    // Purchase modal with budget check
-    if ([TYPES.PURCHASE_BOT, TYPES.PURCHASE_WEBSITE].includes(type)) {
-      const modal = new ModalBuilder()
-        .setCustomId(`purchase_${type}`)
-        .setTitle('Purchase Request');
+    // === PURCHASE TYPES: Show Modal (Only for Purchase Bot/Website)
+    const modal = new ModalBuilder()
+      .setCustomId(`purchase_${type}`)
+      .setTitle('Purchase Request');
 
-      const productInput = new TextInputBuilder()
-        .setCustomId('product')
-        .setLabel('What are you buying?')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setPlaceholder('e.g. Discord Bot, Website Template');
+    const productInput = new TextInputBuilder()
+      .setCustomId('product')
+      .setLabel('What are you buying?')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setPlaceholder('e.g. Discord Bot, Website Template');
 
-      const budgetInput = new TextInputBuilder()
-        .setCustomId('budget')
-        .setLabel('What is your budget?')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setPlaceholder(
-          type === TYPES.PURCHASE_BOT
-            ? 'Minimum £15 (e.g. 20, 30, 50)'
-            : 'Minimum £10 (e.g. 15, 25)'
-        );
-
-      const detailsInput = new TextInputBuilder()
-        .setCustomId('details')
-        .setLabel('Any extra details?')
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(false)
-        .setPlaceholder('Timeline, features, etc.');
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(productInput),
-        new ActionRowBuilder().addComponents(budgetInput),
-        new ActionRowBuilder().addComponents(detailsInput)
+    const budgetInput = new TextInputBuilder()
+      .setCustomId('budget')
+      .setLabel('What is your budget?')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setPlaceholder(
+        type === TYPES.PURCHASE_BOT
+          ? 'Minimum £15 (e.g. 20, 30)'
+          : 'Minimum £10 (e.g. 15, 25)'
       );
 
-      return interaction.showModal(modal);
-    }
+    const detailsInput = new TextInputBuilder()
+      .setCustomId('details')
+      .setLabel('Any extra details?')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(false)
+      .setPlaceholder('Timeline, features, etc.');
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(productInput),
+      new ActionRowBuilder().addComponents(budgetInput),
+      new ActionRowBuilder().addComponents(detailsInput)
+    );
+
+    // ✅ Only show modal — no reply before or after
+    await interaction.showModal(modal);
+    return;
   }
 
-  // === MODALS ===
-  if (interaction.isModalSubmit() && interaction.customId.startsWith('purchase_')) {
-    const type = interaction.customId.replace('purchase_', '');
-    const product = interaction.fields.getTextInputValue('product');
-    const budgetText = interaction.fields.getTextInputValue('budget');
-    const details = interaction.fields.getTextInputValue('details') || '(No details)';
+  // === MODAL SUBMIT ===
+  if (interaction.isModalSubmit()) {
+    const customId = interaction.customId;
 
-    // Parse budget safely
-    const budget = parseFloat(budgetText.replace(/[^\d.]/g, ''));
-    if (isNaN(budget)) {
-      return interaction.reply({
-        content: '❌ Please enter a valid number for your budget (e.g. 15, 20.50).',
-        ephemeral: true,
+    // Handle purchase modals
+    if (customId.startsWith('purchase_')) {
+      const type = customId.replace('purchase_', '');
+      const product = interaction.fields.getTextInputValue('product');
+      const budgetText = interaction.fields.getTextInputValue('budget');
+      const details = interaction.fields.getTextInputValue('details') || '(No details)';
+
+      // Parse budget
+      const budget = parseFloat(budgetText.replace(/[^\d.]/g, ''));
+      if (isNaN(budget)) {
+        return interaction.reply({
+          content: '❌ Please enter a valid number for your budget (e.g. 15, 20.50).',
+          ephemeral: true,
+        });
+      }
+
+      const minBudget = type === TYPES.PURCHASE_BOT ? 15 : 10;
+      if (budget < minBudget) {
+        return interaction.reply({
+          content: `❌ Your budget (£${budget}) is below the minimum.\n> 📌 Minimum: **£${minBudget}**`,
+          ephemeral: true,
+        });
+      }
+
+      const overBudget = (budget - minBudget).toFixed(2);
+
+      // Create ticket for purchase
+      const category = await ensureCategory(interaction.guild, TYPE_NAMES[type]);
+      const roleId = getRoleForType(type);
+
+      const overwrites = [
+        { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+        { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+      ];
+      if (roleId) overwrites.push({ id: roleId, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] });
+
+      const ticketChannel = await interaction.guild.channels.create({
+        name: `purchase-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+        type: ChannelType.GuildText,
+        parent: category,
+        permissionOverwrites: overwrites,
+        topic: `User: ${interaction.user.tag} | Type: ${type} | Budget: £${budget}`,
       });
-    }
 
-    const minBudget = type === TYPES.PURCHASE_BOT ? 15 : 10;
-    const overBudget = Math.max(0, budget - minBudget);
+      const ticketEmbed = new EmbedBuilder()
+        .setTitle(`${CONFIG.BRAND.EMOJIS[type]} ${TYPE_NAMES[type]} Request`)
+        .addFields(
+          { name: '👤 User', value: `<@${interaction.user.id}>`, inline: true },
+          { name: '📦 Product', value: product, inline: true },
+          { name: '💷 Budget', value: `£${budget}`, inline: true },
+          { name: '📈 Above Minimum', value: `£${overBudget}`, inline: true },
+          { name: '📄 Details', value: details }
+        )
+        .setColor(CONFIG.BRAND.COLOR)
+        .setFooter({ text: CONFIG.BRAND.NAME });
 
-    if (budget < minBudget) {
-      return interaction.reply({
-        content: `❌ Your budget (£${budget}) is below the minimum for this service.\n> 📌 Minimum: **£${minBudget}**\n> 💡 Consider increasing your budget to proceed.`,
-        ephemeral: true,
-      });
-    }
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('close_ticket').setLabel('Close Ticket').setStyle(ButtonStyle.Danger).setEmoji(CONFIG.BRAND.EMOJIS.close),
+        new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim Ticket').setStyle(ButtonStyle.Primary).setEmoji(CONFIG.BRAND.EMOJIS.claim)
+      );
 
-    // ✅ Log purchase request with over-minimum info
-    const logChannel = interaction.guild.channels.cache.get(CONFIG.LOG_PURCHASE);
-    if (logChannel) {
-      const embed = new EmbedBuilder()
+      await ticketChannel.send({ content: `<@${interaction.user.id}>`, embeds: [ticketEmbed], components: [row] });
+
+      // Log to purchase log
+      const logEmbed = new EmbedBuilder()
         .setTitle('💎 Purchase Request Submitted')
         .addFields(
           { name: '👤 User', value: `<@${interaction.user.id}>`, inline: true },
-          { name: '📌 Request Type', value: TYPE_NAMES[type], inline: true },
+          { name: '📌 Type', value: TYPE_NAMES[type], inline: true },
           { name: '📦 Product', value: product },
-          { name: '💷 Budget Offered', value: `£${budget.toFixed(2)}`, inline: true },
-          { name: '✅ Minimum Required', value: `£${minBudget}`, inline: true },
-          { name: '📈 Above Minimum', value: `£${overBudget.toFixed(2)}`, inline: true },
+          { name: '💷 Budget', value: `£${budget}`, inline: true },
+          { name: '✅ Min Required', value: `£${minBudget}`, inline: true },
+          { name: '📈 Above Min', value: `£${overBudget}`, inline: true },
           { name: '📄 Details', value: details }
         )
         .setColor('#00FF00')
         .setTimestamp()
         .setFooter({ text: CONFIG.BRAND.NAME });
+      logAction(interaction.guild, CONFIG.LOG_PURCHASE, logEmbed);
 
-      logChannel.send({ embeds: [embed] });
+      // Confirm to user
+      await interaction.reply({
+        content: `✅ Your **${TYPE_NAMES[type]}** request has been submitted!\n> 💵 Budget: **£${budget}** (£${overBudget} above minimum)`,
+        ephemeral: true,
+      });
+
+      return;
     }
-
-    // Confirm to user
-    await interaction.reply({
-      content: `✅ Thank you! Your **${TYPE_NAMES[type]}** request has been submitted.\n> 💵 Budget: **£${budget}** (✓ £${overBudget} above minimum)`,
-      ephemeral: true,
-    });
   }
 });
 
@@ -411,7 +452,6 @@ async function askNextQuestion(channel) {
   await channel.send({ embeds: [embed] });
 }
 
-// Listen for application answers
 client.on('messageCreate', async (msg) => {
   if (msg.author.bot || !msg.guild) return;
   const app = activeApplications.get(msg.channel.id);
@@ -425,7 +465,7 @@ client.on('messageCreate', async (msg) => {
   } else {
     activeApplications.delete(msg.channel.id);
     msg.channel.send('✅ Your application has been submitted for review.');
-    setTimeout(() => msg.channel.delete().catch(() => {}), 7000);
+    setTimeout(() => msg.channel.delete().catch(console.error), 7000);
   }
 });
 
