@@ -289,29 +289,61 @@ client.on('interactionCreate', async (interaction) => {
       askNextQuestion(ticketChannel);
     }
 
-    // Purchase modal
+    // Purchase modal with budget check
     if ([TYPES.PURCHASE_BOT, TYPES.PURCHASE_WEBSITE].includes(type)) {
-      const modal = new ModalBuilder().setCustomId(`purchase_${type}`).setTitle('Purchase Request');
-      const productInput = new TextInputBuilder().setCustomId('product').setLabel('What are you buying?').setStyle(TextInputStyle.Short).setRequired(true);
-      const detailsInput = new TextInputBuilder().setCustomId('details').setLabel('Any extra details?').setStyle(TextInputStyle.Paragraph).setRequired(false);
-      modal.addComponents(new ActionRowBuilder().addComponents(productInput), new ActionRowBuilder().addComponents(detailsInput));
-      await interaction.showModal(modal);
+      const modal = new ModalBuilder()
+        .setCustomId(`purchase_${type}`)
+        .setTitle('Purchase Request');
+
+      const productInput = new TextInputBuilder()
+        .setCustomId('product')
+        .setLabel('What are you buying?')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      const budgetInput = new TextInputBuilder()
+        .setCustomId('budget')
+        .setLabel(type === TYPES.PURCHASE_BOT ? 'Your budget (£15+ required)' : 'Your budget (£10+ required)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      const detailsInput = new TextInputBuilder()
+        .setCustomId('details')
+        .setLabel('Any extra details?')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(productInput),
+        new ActionRowBuilder().addComponents(budgetInput),
+        new ActionRowBuilder().addComponents(detailsInput)
+      );
+
+      return interaction.showModal(modal);
     }
   }
 
   // === MODALS ===
   if (interaction.isModalSubmit() && interaction.customId.startsWith('purchase_')) {
-    const product = interaction.fields.getTextInputValue('product');
-    const details = interaction.fields.getTextInputValue('details') || '(No details)';
     const type = interaction.customId.replace('purchase_', '');
+    const product = interaction.fields.getTextInputValue('product');
+    const budget = parseFloat(interaction.fields.getTextInputValue('budget').replace('£',''));
+    const details = interaction.fields.getTextInputValue('details') || '(No details)';
     const logChannel = interaction.guild.channels.cache.get(CONFIG.LOG_PURCHASE);
 
+    // Validate budget
+    if ((type === TYPES.PURCHASE_BOT && budget < 15) || (type === TYPES.PURCHASE_WEBSITE && budget < 10)) {
+      return interaction.reply({ content: `❌ Your budget is too low for ${TYPE_NAMES[type]}.`, ephemeral: true });
+    }
+
+    // Log purchase request
     if (logChannel) {
       const embed = new EmbedBuilder()
         .setTitle('💎 Purchase Request')
         .addFields(
           { name: 'User', value: `<@${interaction.user.id}>` },
           { name: 'Product', value: product },
+          { name: 'Budget', value: `£${budget}` },
           { name: 'Extra Info', value: details },
           { name: 'Type', value: TYPE_NAMES[type] }
         )
