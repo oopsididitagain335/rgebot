@@ -72,7 +72,7 @@ const TYPE_NAMES = {
   [TYPES.APPLY_STAFF]: 'Moderator Application',
 };
 
-// Staff application questions for dev hub
+// Staff application questions
 const STAFF_QUESTIONS = [
   'Why do you want to join as a moderator/admin in this dev hub?',
   'How much time can you dedicate weekly?',
@@ -102,44 +102,146 @@ async function ensureCategory(guild, typeName) {
 
 function getRoleForType(type) {
   switch (type) {
-    case TYPES.SUPPORT:
-      return CONFIG.ROLES.SUPPORT;
-    case TYPES.PURCHASE_BASIC:
-    case TYPES.PURCHASE_PREMIUM:
-      return CONFIG.ROLES.PURCHASE;
-    case TYPES.CONTACT_OWNER:
-      return CONFIG.ROLES.CONTACT_OWNER;
-    default:
-      return null;
+    case TYPES.SUPPORT: return CONFIG.ROLES.SUPPORT;
+    case TYPES.PURCHASE_BOT:
+    case TYPES.PURCHASE_WEBSITE: return CONFIG.ROLES.PURCHASE;
+    case TYPES.CONTACT_OWNER: return CONFIG.ROLES.CONTACT_OWNER;
+    default: return null;
   }
 }
 
-// 🛠️ Ticket Panel
+// 🛠️ Ticket Panel + Admin Commands + Help
 client.on('messageCreate', async (msg) => {
-  if (msg.content !== '!ticketpanel') return;
-  if (!msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
+  if (!msg.guild) return;
 
-  const embed = new EmbedBuilder()
-    .setTitle(`${CONFIG.BRAND.EMOJIS.contact_owner} Open a Ticket`)
-    .setDescription('Choose a ticket type to open.')
-    .setColor(CONFIG.BRAND.COLOR)
-    .setFooter({ text: CONFIG.BRAND.NAME });
+  // === Ticket Panel ===
+  if (msg.content === '!ticketpanel') {
+    if (!msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
 
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(TYPES.PURCHASE_BASIC).setLabel('Purchase Basic').setStyle(ButtonStyle.Primary).setEmoji(CONFIG.BRAND.EMOJIS.purchase_basic),
-    new ButtonBuilder().setCustomId(TYPES.PURCHASE_PREMIUM).setLabel('Purchase Premium').setStyle(ButtonStyle.Success).setEmoji(CONFIG.BRAND.EMOJIS.purchase_premium),
-    new ButtonBuilder().setCustomId(TYPES.SUPPORT).setLabel('Support').setStyle(ButtonStyle.Secondary).setEmoji(CONFIG.BRAND.EMOJIS.support),
-    new ButtonBuilder().setCustomId(TYPES.CONTACT_OWNER).setLabel('Contact Owner').setStyle(ButtonStyle.Danger).setEmoji(CONFIG.BRAND.EMOJIS.contact_owner),
-    new ButtonBuilder().setCustomId(TYPES.APPLY_STAFF).setLabel('Moderator Application').setStyle(ButtonStyle.Primary).setEmoji(CONFIG.BRAND.EMOJIS.apply_staff)
-  );
+    const embed = new EmbedBuilder()
+      .setTitle(`${CONFIG.BRAND.EMOJIS.contact_owner} Open a Ticket`)
+      .setDescription('Click a button to open a ticket.')
+      .setColor(CONFIG.BRAND.COLOR)
+      .setFooter({ text: CONFIG.BRAND.NAME });
 
-  await msg.channel.send({ embeds: [embed], components: [row] });
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(TYPES.PURCHASE_BOT)
+        .setLabel('Purchase Bot')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji(CONFIG.BRAND.EMOJIS.purchase_bot),
+      new ButtonBuilder()
+        .setCustomId(TYPES.PURCHASE_WEBSITE)
+        .setLabel('Purchase Website')
+        .setStyle(ButtonStyle.Success)
+        .setEmoji(CONFIG.BRAND.EMOJIS.purchase_website),
+      new ButtonBuilder()
+        .setCustomId(TYPES.SUPPORT)
+        .setLabel('Support')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji(CONFIG.BRAND.EMOJIS.support),
+      new ButtonBuilder()
+        .setCustomId(TYPES.CONTACT_OWNER)
+        .setLabel('Contact Owner')
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji(CONFIG.BRAND.EMOJIS.contact_owner),
+      new ButtonBuilder()
+        .setCustomId(TYPES.APPLY_STAFF)
+        .setLabel('Moderator Application')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji(CONFIG.BRAND.EMOJIS.apply_staff)
+    );
+
+    await msg.channel.send({ embeds: [embed], components: [row] });
+  }
+
+  // === Admin Commands: !purchase, !scammer ===
+  if (msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+    const args = msg.content.split(' ');
+
+    // ✅ Purchase logging
+    if (args[0] === '!purchase' && args[1] && args[2]) {
+      const [_, status, userId] = args;
+      const logChannel = msg.guild.channels.cache.get(CONFIG.LOG_PURCHASE);
+      if (logChannel) {
+        const embed = new EmbedBuilder()
+          .setTitle('💎 Purchase Update')
+          .setDescription(`**Status:** ${status.toUpperCase()}\n**User:** <@${userId}>`)
+          .setColor(status.toLowerCase() === 'success' ? 'GREEN' : 'RED')
+          .setTimestamp()
+          .setFooter({ text: CONFIG.BRAND.NAME });
+        logChannel.send({ embeds: [embed] });
+      }
+      msg.reply(`✅ Logged purchase status: ${status}`);
+    }
+
+    // ⚠️ Scammer logging
+    if (args[0] === '!scammer' && args[1]) {
+      const userId = args[1].replace(/[<@!>]/g, '');
+      const reason = args.slice(2).join(' ') || 'No reason provided';
+      const logChannel = msg.guild.channels.cache.get(CONFIG.LOG_SCAM);
+      if (logChannel) {
+        const embed = new EmbedBuilder()
+          .setTitle('⚠️ Scammer Report')
+          .addFields(
+            { name: 'User', value: `<@${userId}>`, inline: true },
+            { name: 'Reported By', value: `<@${msg.author.id}>`, inline: true },
+            { name: 'Reason', value: reason }
+          )
+          .setColor('#FF0000')
+          .setTimestamp()
+          .setFooter({ text: CONFIG.BRAND.NAME });
+        logChannel.send({ embeds: [embed] });
+      }
+      msg.reply(`✅ Marked <@${userId}> as a scammer. Reason: ${reason}`);
+    }
+  }
+
+  // === Help Command ===
+  if (msg.content === '!help') {
+    const embed = new EmbedBuilder()
+      .setTitle('📖 Dev Hub Bot Commands')
+      .setDescription('Here is a list of available commands:')
+      .addFields(
+        { name: '!ticketpanel', value: 'Admin only. Sends the ticket panel with all ticket buttons.', inline: false },
+        { name: '!purchase <status> <userID>', value: 'Admin only. Logs purchase status for a user.', inline: false },
+        { name: '!scammer <userID> <reason>', value: 'Admin only. Marks a user as a scammer with optional reason.', inline: false },
+        { name: '!help', value: 'Shows this help message.', inline: false }
+      )
+      .setColor(CONFIG.BRAND.COLOR)
+      .setFooter({ text: CONFIG.BRAND.NAME })
+      .setTimestamp();
+
+    await msg.channel.send({ embeds: [embed] });
+  }
 });
 
-// 🎟️ Handle ticket/modals
+// 🎟️ Ticket buttons and modals
 client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton() && !interaction.isModalSubmit()) return;
+
+  // === BUTTONS ===
   if (interaction.isButton()) {
     const type = interaction.customId;
+
+    // Close Ticket
+    if (type === 'close_ticket') {
+      await interaction.reply('🔒 Closing ticket in 5s...');
+      const log = interaction.guild.channels.cache.get(CONFIG.LOG_CLOSE);
+      if (log) log.send({ embeds: [new EmbedBuilder().setTitle('🗑️ Ticket Closed').setDescription(`Channel: ${interaction.channel}\nClosed by: ${interaction.user}`).setColor('#FF0000').setTimestamp()] });
+      setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
+      return;
+    }
+
+    // Claim Ticket
+    if (type === 'claim_ticket') {
+      if (!interaction.member.roles.cache.has(CONFIG.ROLES.SUPPORT)) {
+        return interaction.reply({ content: '❌ Cannot claim ticket.', ephemeral: true });
+      }
+      return interaction.reply(`🔖 Ticket claimed by ${interaction.user}`);
+    }
+
+    // Only continue for valid ticket types
     if (!Object.values(TYPES).includes(type)) return;
 
     const category = await ensureCategory(interaction.guild, TYPE_NAMES[type]);
@@ -161,7 +263,10 @@ client.on('interactionCreate', async (interaction) => {
 
     const ticketEmbed = new EmbedBuilder()
       .setTitle(`${CONFIG.BRAND.EMOJIS[type]} ${TYPE_NAMES[type]} Ticket`)
-      .addFields({ name: '👤 User', value: `<@${interaction.user.id}>`, inline: true }, { name: '📁 Type', value: TYPE_NAMES[type], inline: true })
+      .addFields(
+        { name: '👤 User', value: `<@${interaction.user.id}>`, inline: true },
+        { name: '📁 Type', value: TYPE_NAMES[type], inline: true }
+      )
       .setColor(CONFIG.BRAND.COLOR)
       .setFooter({ text: CONFIG.BRAND.NAME });
 
@@ -172,20 +277,20 @@ client.on('interactionCreate', async (interaction) => {
 
     await ticketChannel.send({ content: `<@${interaction.user.id}>`, embeds: [ticketEmbed], components: [row] });
 
-    // Logging
+    // Log ticket open
     const logChannel = interaction.guild.channels.cache.get(CONFIG.LOG_OPEN);
     if (logChannel) logChannel.send({ embeds: [new EmbedBuilder().setTitle('🎫 Ticket Opened').setDescription(`Type: **${TYPE_NAMES[type]}**\nChannel: ${ticketChannel}`).setColor('#00FF00').setTimestamp()] });
 
     await interaction.reply({ content: `✅ Ticket created: ${ticketChannel}`, ephemeral: true });
 
-    // Staff application questions
+    // Staff application
     if (type === TYPES.APPLY_STAFF) {
       activeApplications.set(ticketChannel.id, { userId: interaction.user.id, answers: [], index: 0 });
       askNextQuestion(ticketChannel);
     }
 
-    // Purchase modals
-    if ([TYPES.PURCHASE_BASIC, TYPES.PURCHASE_PREMIUM].includes(type)) {
+    // Purchase modal
+    if ([TYPES.PURCHASE_BOT, TYPES.PURCHASE_WEBSITE].includes(type)) {
       const modal = new ModalBuilder().setCustomId(`purchase_${type}`).setTitle('Purchase Request');
       const productInput = new TextInputBuilder().setCustomId('product').setLabel('What are you buying?').setStyle(TextInputStyle.Short).setRequired(true);
       const detailsInput = new TextInputBuilder().setCustomId('details').setLabel('Any extra details?').setStyle(TextInputStyle.Paragraph).setRequired(false);
@@ -194,31 +299,47 @@ client.on('interactionCreate', async (interaction) => {
     }
   }
 
-  // Modals
-  if (interaction.isModalSubmit()) {
-    if (interaction.customId.startsWith('purchase_')) {
-      const product = interaction.fields.getTextInputValue('product');
-      const details = interaction.fields.getTextInputValue('details') || '(No details)';
-      const logChannel = interaction.guild.channels.cache.get(CONFIG.LOG_PURCHASE);
-      if (logChannel) logChannel.send({
-        content: `💎 Purchase Request by <@${interaction.user.id}>`,
-        embeds: [{ title: 'Purchase Details', fields: [{ name: 'Product', value: product }, { name: 'Extra Info', value: details }, { name: 'Type', value: TYPE_NAMES[interaction.customId.replace('purchase_', '')] }], color: CONFIG.BRAND.COLOR, timestamp: new Date() }],
-      });
-      await interaction.reply({ content: '✅ Your purchase request has been submitted!', ephemeral: true });
+  // === MODALS ===
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('purchase_')) {
+    const product = interaction.fields.getTextInputValue('product');
+    const details = interaction.fields.getTextInputValue('details') || '(No details)';
+    const type = interaction.customId.replace('purchase_', '');
+    const logChannel = interaction.guild.channels.cache.get(CONFIG.LOG_PURCHASE);
+
+    if (logChannel) {
+      const embed = new EmbedBuilder()
+        .setTitle('💎 Purchase Request')
+        .addFields(
+          { name: 'User', value: `<@${interaction.user.id}>` },
+          { name: 'Product', value: product },
+          { name: 'Extra Info', value: details },
+          { name: 'Type', value: TYPE_NAMES[type] }
+        )
+        .setColor(CONFIG.BRAND.COLOR)
+        .setTimestamp()
+        .setFooter({ text: CONFIG.BRAND.NAME });
+      logChannel.send({ embeds: [embed] });
     }
+
+    await interaction.reply({ content: '✅ Your purchase request has been submitted!', ephemeral: true });
   }
 });
 
-// 🔹 Staff application Q&A
+// 🔹 Staff Application Q&A
 async function askNextQuestion(channel) {
   const app = activeApplications.get(channel.id);
   if (!app || app.index >= STAFF_QUESTIONS.length) return;
 
   const q = STAFF_QUESTIONS[app.index];
-  const embed = new EmbedBuilder().setTitle(`💼 Moderator Application — Q${app.index + 1}/${STAFF_QUESTIONS.length}`).setDescription(q).setColor('#FFD700').setFooter({ text: 'Reply with your answer.' });
+  const embed = new EmbedBuilder()
+    .setTitle(`💼 Moderator Application — Q${app.index + 1}/${STAFF_QUESTIONS.length}`)
+    .setDescription(q)
+    .setColor('#FFD700')
+    .setFooter({ text: 'Reply with your answer.' });
   await channel.send({ embeds: [embed] });
 }
 
+// Listen for application answers
 client.on('messageCreate', async (msg) => {
   if (msg.author.bot || !msg.guild) return;
   const app = activeApplications.get(msg.channel.id);
@@ -233,41 +354,6 @@ client.on('messageCreate', async (msg) => {
     activeApplications.delete(msg.channel.id);
     msg.channel.send('✅ Your application has been submitted for review.');
     setTimeout(() => msg.channel.delete().catch(() => {}), 7000);
-  }
-});
-
-// 🔒 Ticket Controls + Claim
-client.on('interactionCreate', async (i) => {
-  if (!i.isButton()) return;
-  if (i.customId === 'close_ticket') {
-    await i.reply('🔒 Closing ticket in 5s...');
-    const log = i.guild.channels.cache.get(CONFIG.LOG_CLOSE);
-    if (log) log.send(`🗑️ Ticket ${i.channel} closed by ${i.user}`);
-    setTimeout(() => i.channel.delete().catch(() => {}), 5000);
-  }
-  if (i.customId === 'claim_ticket') {
-    if (!i.member.roles.cache.has(CONFIG.ROLES.SUPPORT)) return i.reply({ content: '❌ Cannot claim ticket.', ephemeral: true });
-    i.reply(`🔖 Ticket claimed by ${i.user}`);
-  }
-});
-
-// 💻 Commands for marking purchase success/failure & scammer
-client.on('messageCreate', async (msg) => {
-  if (!msg.guild || !msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
-
-  const args = msg.content.split(' ');
-  if (args[0] === '!purchase' && args[1] && args[2]) {
-    const [_, status, userId] = args;
-    const logChannel = msg.guild.channels.cache.get(CONFIG.LOG_PURCHASE);
-    if (logChannel) logChannel.send(`${status.toUpperCase()} purchase for <@${userId}>`);
-    msg.reply(`✅ Logged purchase status: ${status}`);
-  }
-
-  if (args[0] === '!scammer' && args[1]) {
-    const userId = args[1].replace(/[<@!>]/g, '');
-    const logChannel = msg.guild.channels.cache.get(CONFIG.LOG_SCAM);
-    if (logChannel) logChannel.send(`⚠️ User <@${userId}> marked as a scammer by ${msg.author}`);
-    msg.reply(`✅ Marked <@${userId}> as a scammer.`);
   }
 });
 
